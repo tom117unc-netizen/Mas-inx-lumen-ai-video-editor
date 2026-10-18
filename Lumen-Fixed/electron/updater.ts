@@ -59,6 +59,11 @@ export function initUpdater(getWindow: () => BrowserWindow | null) {
   window = getWindow
   if (started) return
   started = true
+  // Custom anime-review builds are maintained exclusively through the user's
+  // Git repository. Never contact upstream feeds, download or install updates.
+  // The IPC remains available so existing UI consumers receive a safe state.
+  set({ status: 'unsupported' })
+  return
   const feed = process.env.LUMEN_UPDATE_URL
   if (!app.isPackaged && !feed) {
     set({ status: 'unsupported' })
