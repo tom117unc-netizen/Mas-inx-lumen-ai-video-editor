@@ -169,7 +169,7 @@ class SqliteContextBankStore implements ContextBankStore {
     if (request.mirror.version !== 1 || request.mirror.format !== 'lumen-context-mirror') throw new Error('Unsupported Context Bank mirror version')
 
     const previousSources = new Map(
-      (this.db.prepare('SELECT asset_id,path,size,mtime,fingerprint FROM source_assets').all() as ExistingSource[])
+      (this.db.prepare('SELECT asset_id,path,size,mtime,fingerprint FROM source_assets').all() as unknown as ExistingSource[])
         .map(row => [row.asset_id, row] as const),
     )
 
