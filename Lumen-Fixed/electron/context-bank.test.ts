@@ -105,4 +105,43 @@ describe('context bank storage', () => {
       one.close()
     }
   })
+
+  it('stores a source fingerprint, reuses it for timeline-only edits, and refreshes it when source metadata changes', () => {
+    const projectPath = projectFile()
+    const source = path.join(path.dirname(projectPath), 'episode01.mkv')
+    fs.writeFileSync(source, Buffer.from('first-scene'))
+    let stat = fs.statSync(source)
+    const firstMirror = mirror('project-1', 1)
+    Object.assign(firstMirror.assets[0], {
+      path: source,
+      fileName: path.basename(source),
+      size: stat.size,
+      mtime: Math.round(stat.mtimeMs),
+    })
+    const store = openContextBank(projectPath, 'project-1')
+    try {
+      store.sync({ projectPath, mirror: firstMirror })
+      const query = () => store.query({ projectPath, projectId: 'project-1', purpose: 'fingerprint test', maxItems: 20, maxCharacters: 20000 })
+      const firstFingerprint = query().sources[0]?.fingerprint
+      expect(firstFingerprint).toMatch(/^[a-f0-9]{64}$/)
+
+      const moved = structuredClone(firstMirror)
+      moved.revision = 2
+      moved.sequences[0].clips[0].start = 240
+      store.sync({ projectPath, mirror: moved })
+      expect(query().sources[0]?.fingerprint).toBe(firstFingerprint)
+
+      fs.writeFileSync(source, Buffer.from('second-scene-longer'))
+      stat = fs.statSync(source)
+      const changed = structuredClone(moved)
+      changed.revision = 3
+      changed.assets[0].size = stat.size
+      changed.assets[0].mtime = Math.round(stat.mtimeMs)
+      store.sync({ projectPath, mirror: changed })
+      expect(query().sources[0]?.fingerprint).toMatch(/^[a-f0-9]{64}$/)
+      expect(query().sources[0]?.fingerprint).not.toBe(firstFingerprint)
+    } finally {
+      store.close()
+    }
+  })
 })
