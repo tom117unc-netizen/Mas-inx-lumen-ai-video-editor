@@ -1,0 +1,6 @@
+{
+  ".github/workflows/build-long-export-fix.yml": "e763446a51a6a31ae44405374ac7518a88f4cbfeaa2ccccf0b2580e67c653306",
+  "README.md": "d992afeb8639022a94baae941376ba9930bffa9b3e546d05bf06c63ce2be481e",
+  "apply-and-build.ps1": "e14163f9502a5145a043ff04c485f233dc2f3f44bde668bb87a066994dd7e523",
+  "lumen-long-export-stability.patch": "a1159a72643b0be59ff6d303895d1dcebd4b40a4dd8e64baa1c7d999f237193e"
+}

@@ -1,0 +1,19 @@
+Start: 2026-10-07T03:05:18.4043425+01:00
+LumenExe: C:\Users\tom11\AppData\Local\Programs\Lumen\Lumen.exe
+PowerShell: 5.1.26100.7462
+OS: Microsoft Windows 11 Home 10.0.26100 build 26100
+RAM_GB: 63.9
+VideoControllers:
+
+Name                    DriverVersion AdapterRAM
+----                    ------------- ----------
+NVIDIA GeForce RTX 3060 32.0.15.9144  4293918720
+
+
+
+nvidia-smi:
+GPU 0: NVIDIA GeForce RTX 3060 (UUID: GPU-7290545e-5b60-1b67-507e-e560e46626ef)
+
+MainPID: 31316
+End: 2026-10-07T03:06:47.8757274+01:00
+MainExitCode: 0

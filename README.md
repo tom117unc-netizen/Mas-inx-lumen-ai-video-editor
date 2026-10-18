@@ -1,44 +1,49 @@
-# Lumen Anime Review Edition — development overlay
+# Lumen 1.4.0 — long-export stability fix
 
-This repository contains the anime-review development modules built on top of [Mas-inx/lumen-ai-video-editor](https://github.com/Mas-inx/lumen-ai-video-editor).
+Prepared for the 1-hour cuts-only MP4 export that consistently turns the Electron window black during export.
 
-**Important:** This is NOT a clone of the upstream Lumen repository, an integrated application, or a validated Windows build. GitHub was inaccessible from the build container, and the GitHub connector does not grant repository creation. These modules are experimental and need integration and testing.
+## Changes
 
-## Publish to your own GitHub repository
+1. **FrameFeeder decoder lifetime**
+   - Finished cuts no longer leave their `VideoReader` alive until the entire export ends.
+   - Active decoder count is bounded by the video clips actually needed by the current composite frame.
 
-1. Create an empty GitHub repository named `lumen-anime-review-edition` under your account. Do not initialise it with a README.
-2. Extract this ZIP, open PowerShell in its root and run:
+2. **Preview media release before export**
+   - Dormant preview `<video preload="auto">` elements are unloaded before the frame-exact export starts.
+   - Export uses `FrameFeeder`/WebCodecs, so these players are redundant during the export and are recreated when previewing later.
+
+3. **Offline audio graph disposal**
+   - Every two-second export mix block explicitly disconnects its mixer and nested graphs.
+   - This avoids asking Chromium GC to eventually clean up thousands of OfflineAudioContext graph nodes in a long export.
+
+4. **Complete disk writes**
+   - Export chunks are no longer assumed to be written completely by one `fs.write` callback.
+   - Partial writes continue until all bytes are on disk; zero-progress writes fail instead of hanging/corrupting output.
+
+5. **Persistent process-failure logging**
+   - Renderer/GPU/utility process exits are written to:
+     `%APPDATA%\Lumen\lumen-process-failures.log` (actual Electron userData folder may vary slightly).
+   - If a black window ever happens again, this gives an actual Electron process-exit reason.
+
+## Regression tests
+
+- `src/engine/stills.test.ts` covers retiring inactive video readers.
+- `electron/export-write.test.ts` covers partial/zero-progress file writes.
+- The included GitHub Actions workflow runs the full existing test suite and TypeScript checks before building the Windows installer.
+
+## Build on Windows
+
+You need Node.js 24 and Git.
 
 ```powershell
-git remote add origin https://github.com/tom117unc-netizen/lumen-anime-review-edition.git
-git branch -M main
-git push -u origin main
+git clone --branch v1.4.0 https://github.com/Mas-inx/lumen-ai-video-editor.git
+cd lumen-ai-video-editor
+# Copy this package somewhere and run:
+powershell -ExecutionPolicy Bypass -File C:\path\to\apply-and-build.ps1 -Repo .
 ```
 
-The archive contains a `.git` directory and an initial commit. If Windows has removed hidden `.git` files during extraction, run `git init`, `git add .`, `git commit -m "Initial anime review development overlay"` before adding the remote.
+The installer is produced under `release\`.
 
-## Bringing in the original Lumen source
+## Important verification note
 
-Clone the original separately and create an integration branch. Do **not** simply copy all addon files into the original app without adapting imports and testing:
-
-```powershell
-git clone https://github.com/Mas-inx/lumen-ai-video-editor.git lumen-base
-cd lumen-base
-git remote add anime https://github.com/tom117unc-netizen/lumen-anime-review-edition.git
-git switch -c anime-integration
-```
-
-The overlay is deliberately separate until the full source is available in a working build environment. The existing Lumen command layer and undo history should be used for all applied edits; see STORE-INTEGRATION.md.
-
-## Included modules
-
-- `project-manifest.ts`: timeline snapshot and validation
-- `project-patches.ts`: proposed edit operations
-- `anime-review-approval.ts`: before/after preview
-- `anime-ai-context.ts`: smaller context windows
-- `anime-footage-matcher.ts`: transcript/cue matching
-- `anime-pngtuber-sync.ts`: audio-based mouth intervals and sprite replacement
-- `anime-review.ts`: editorial planning
-- `video-quality.ts`: quality checks
-
-No source-code files from the upstream repository are included in this overlay.
+The ChatGPT execution container used to prepare this patch cannot reach GitHub/npm, so it cannot perform the real `npm ci`, Vitest, TypeScript, or Windows NSIS build here. The workflow/script deliberately makes those checks mandatory before producing the installer.

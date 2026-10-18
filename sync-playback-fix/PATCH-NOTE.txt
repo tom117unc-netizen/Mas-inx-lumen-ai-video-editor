@@ -1,0 +1,1 @@
+v2: fixes apply.mjs ReferenceError caused by four missing const declarations in the patcher. No Lumen source files were written before that failure point.

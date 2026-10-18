@@ -1,0 +1,202 @@
+--- a/src/engine/stills.ts
++++ b/src/engine/stills.ts
+@@ -9,25 +9,49 @@
+ import { framesAt, VideoReader } from './decode'
+ import { ensureImage, ensureSequenceFrame, sequenceFrame, withVideoFrames } from './media'
+ 
+-const readerId = (key: string, url: string) => `${key}\n${url}`
++/**
++ * Reuses expensive media readers by source file instead of by cut.
++ *
++ * Mediabunny builds/parses the MP4 sample table when a reader seeks. A long
++ * recording cut hundreds of times must not reopen that same Input hundreds of
++ * times: on large OBS recordings those sample tables are substantial JS object
++ * graphs and repeated reparsing can drive Electron into the V8 heap limit.
++ *
++ * A pool still allows two copies of the same source to be visible at once
++ * (for example a transition or overlay). The common cuts-only case uses one
++ * reader for the source for the entire export.
++ */
++export class SourceReaderPool<T extends { dispose(): void }> {
++  private readonly readers = new Map<string, T[]>()
+ 
+-/**
+- * Long, heavily-cut exports must not retain one VideoReader for every cut
+- * encountered since frame zero. Each reader owns a Mediabunny input/cache and
+- * decoder canvas pool, so retaining hundreds of finished cuts can exhaust the
+- * Electron renderer/GPU process.
+- */
+-export function pruneInactiveReaders<T extends { dispose(): void }>(readers: Map<string, T>, active: ReadonlySet<string>) {
+-  for (const [id, reader] of readers) {
+-    if (active.has(id)) continue
+-    reader.dispose()
+-    readers.delete(id)
++  constructor(private readonly create: (url: string) => T) {}
++
++  get(url: string, slot = 0) {
++    let pool = this.readers.get(url)
++    if (!pool) {
++      pool = []
++      this.readers.set(url, pool)
++    }
++    while (pool.length <= slot) pool.push(this.create(url))
++    return pool[slot]
++  }
++
++  count(url?: string) {
++    if (url !== undefined) return this.readers.get(url)?.length ?? 0
++    let total = 0
++    for (const pool of this.readers.values()) total += pool.length
++    return total
++  }
++
++  dispose() {
++    for (const pool of this.readers.values()) for (const reader of pool) reader.dispose()
++    this.readers.clear()
+   }
+ }
+ 
+ /** Decodes, for one frame at a time, exactly the video frames the compositor will draw — inside nested timelines too. */
+ export class FrameFeeder {
+-  private readers = new Map<string, VideoReader>()
++  private readers = new SourceReaderPool((url) => new VideoReader(url, this.width, this.height))
+   private ready = new Map<string, CanvasImageSource | null>()
+   constructor(
+     /** The project frames are prepared for (may change between frames: readers carry over). */
+@@ -38,21 +62,22 @@
+ 
+   async prepare(frame: number) {
+     const drawn = mediaDrawnAt(this.project, frame)
+-    const activeReaders = new Set<string>()
+-    for (const { clip, view, key } of drawn) {
+-      const asset = clip.assetId ? view.assets[clip.assetId] : undefined
+-      if (asset && !asset.source.missing && asset.source.type === 'file' && asset.kind === 'video') {
+-        activeReaders.add(readerId(key, asset.source.url))
+-      }
+-    }
+-    pruneInactiveReaders(this.readers, activeReaders)
+     this.ready.clear()
++
++    // slot 0 is the normal case. If the same source appears twice in one
++    // composite frame (transition/overlay), slot 1 etc. provides an independent
++    // decoder without turning every timeline cut into a new Input.
++    const usedBySource = new Map<string, number>()
++
+     for (const { clip, local, view, key, offset } of drawn) {
+       const asset = clip.assetId ? view.assets[clip.assetId] : undefined
+       if (!asset || asset.source.missing) continue
+       const t = clipSourceTime(clip, local, view.settings.fps) - (offset ?? 0)
+       if (asset.source.type === 'file' && asset.kind === 'video') {
+-        this.ready.set(key, await this.reader(key, asset.source.url).frameAt(Math.max(0, t)))
++        const url = asset.source.url
++        const slot = usedBySource.get(url) ?? 0
++        usedBySource.set(url, slot + 1)
++        this.ready.set(key, await this.readers.get(url, slot).frameAt(Math.max(0, t)))
+       } else if (asset.source.type === 'file' && asset.kind === 'image') {
+         await ensureImage(asset.source.url)
+       } else if (asset.source.type === 'sequence') {
+@@ -61,20 +86,9 @@
+     }
+   }
+ 
+-  private reader(key: string, url: string) {
+-    const id = readerId(key, url)
+-    let r = this.readers.get(id)
+-    if (!r) {
+-      r = new VideoReader(url, this.width, this.height)
+-      this.readers.set(id, r)
+-    }
+-    return r
+-  }
+-
+   frame = (clipId: string) => this.ready.get(clipId) ?? null
+ 
+   dispose() {
+-    for (const r of this.readers.values()) r.dispose()
+-    this.readers.clear()
++    this.readers.dispose()
+   }
+ }
+--- a/src/engine/stills.test.ts
++++ b/src/engine/stills.test.ts
+@@ -1,34 +1,56 @@
+ import { describe, expect, it, vi } from 'vitest'
+-import { pruneInactiveReaders } from './stills'
++import { SourceReaderPool } from './stills'
+ 
+-describe('pruneInactiveReaders', () => {
+-  it('disposes readers for cuts that are no longer visible', () => {
+-    const old = { dispose: vi.fn() }
+-    const current = { dispose: vi.fn() }
+-    const readers = new Map([
+-      ['old', old],
+-      ['current', current],
+-    ])
++describe('SourceReaderPool', () => {
++  it('reuses one reader for successive cuts from the same source', () => {
++    const created: Array<{ url: string; dispose: ReturnType<typeof vi.fn> }> = []
++    const pool = new SourceReaderPool((url) => {
++      const reader = { url, dispose: vi.fn() }
++      created.push(reader)
++      return reader
++    })
+ 
+-    pruneInactiveReaders(readers, new Set(['current']))
++    const firstCut = pool.get('recording.mp4', 0)
++    const hundredthCut = pool.get('recording.mp4', 0)
+ 
+-    expect(old.dispose).toHaveBeenCalledOnce()
+-    expect(current.dispose).not.toHaveBeenCalled()
+-    expect([...readers.keys()]).toEqual(['current'])
++    expect(hundredthCut).toBe(firstCut)
++    expect(created).toHaveLength(1)
++    expect(pool.count('recording.mp4')).toBe(1)
+   })
+ 
+-  it('keeps every reader needed by the current composite frame', () => {
+-    const a = { dispose: vi.fn() }
+-    const b = { dispose: vi.fn() }
+-    const readers = new Map([
+-      ['a', a],
+-      ['b', b],
+-    ])
++  it('uses a second reader only when the same source is simultaneously needed twice', () => {
++    const create = vi.fn((url: string) => ({ url, dispose: vi.fn() }))
++    const pool = new SourceReaderPool(create)
+ 
+-    pruneInactiveReaders(readers, new Set(['a', 'b']))
++    const outgoing = pool.get('recording.mp4', 0)
++    const incoming = pool.get('recording.mp4', 1)
+ 
+-    expect(a.dispose).not.toHaveBeenCalled()
+-    expect(b.dispose).not.toHaveBeenCalled()
+-    expect(readers.size).toBe(2)
++    expect(outgoing).not.toBe(incoming)
++    expect(create).toHaveBeenCalledTimes(2)
++    expect(pool.count('recording.mp4')).toBe(2)
++
++    // The next transition reuses those same two readers rather than opening two more.
++    expect(pool.get('recording.mp4', 0)).toBe(outgoing)
++    expect(pool.get('recording.mp4', 1)).toBe(incoming)
++    expect(create).toHaveBeenCalledTimes(2)
++  })
++
++  it('keeps different source files in independent pools and disposes all readers', () => {
++    const readers: Array<{ url: string; dispose: ReturnType<typeof vi.fn> }> = []
++    const pool = new SourceReaderPool((url) => {
++      const reader = { url, dispose: vi.fn() }
++      readers.push(reader)
++      return reader
++    })
++
++    pool.get('a.mp4', 0)
++    pool.get('b.mp4', 0)
++    pool.get('b.mp4', 1)
++
++    expect(pool.count()).toBe(3)
++    pool.dispose()
++
++    expect(readers.every((r) => r.dispose.mock.calls.length === 1)).toBe(true)
++    expect(pool.count()).toBe(0)
+   })
+ })
