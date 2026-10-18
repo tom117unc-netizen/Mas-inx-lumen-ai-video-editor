@@ -9,6 +9,7 @@ import { DEFAULT_TEXT, DEFAULT_TRANSFORM } from './defaults'
 import { createEmptyProject } from './new-project'
 import { verifyApprovedProposal, type ReviewProposal } from './anime-review-approval'
 import { normalizeProject } from './ops'
+import { applyMarkerChanges, type MarkerChange } from './anime-timeline-operations'
 import type { Clip, Project } from './types'
 
 enablePatches()
@@ -49,6 +50,7 @@ interface EditorState {
   /** Groups every dispatch inside `fn` into a single undo step. */
   transaction: (label: string, source: ActionSource, fn: () => void) => HistoryEntry | null
   approveAiProposal: (proposal: ReviewProposal) => DispatchResult
+  applyAiMarkerChanges: (changes: readonly MarkerChange[]) => DispatchResult
   undo: () => HistoryEntry | undefined
   redo: () => HistoryEntry | undefined
   /** Replaces the document (open / new project) and clears history. */
@@ -199,6 +201,35 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
     set(s => ({ project: next, past: [...s.past, entry].slice(-HISTORY_LIMIT), future: [], version: s.version + 1 }))
     return { ok: true, result: { changes: proposal.changes.length } }
+  },
+  applyAiMarkerChanges(changes) {
+    if (openTransaction) return { ok: false, error: 'Finish the current edit transaction first' }
+    const before = get().project
+    let next: Project
+    let patches: Patch[]
+    let inverse: Patch[]
+    try {
+      // Validate the entire batch before committing anything.
+      const verified = applyMarkerChanges(before, changes)
+      ;[next, patches, inverse] = produceWithPatches(before, draft => {
+        draft.markers = verified.markers
+        for (const [id, seq] of Object.entries(verified.sequences ?? {})) {
+          if (draft.sequences?.[id]) draft.sequences[id].markers = seq.markers
+        }
+      })
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+    if (!patches.length) return { ok: true, result: { changes: 0 } }
+    const entry: HistoryEntry = {
+      id: nextEntryId++, label: 'AI marker edits', source: 'ai',
+      patches, inverse, at: performance.now(),
+    }
+    set(state => ({
+      project: next, past: [...state.past, entry].slice(-HISTORY_LIMIT),
+      future: [], version: state.version + 1,
+    }))
+    return { ok: true, result: { changes: changes.length } }
   },
   undo() {
     const { past, future, project, version } = get()
