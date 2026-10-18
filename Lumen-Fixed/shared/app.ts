@@ -5,6 +5,7 @@
  * user picked (or that a project it opened references).
  */
 
+import type { ContextBankAPI } from './context-bank'
 import type { IngestClip, IngestQuality, IngestResult, IngestSession, IngestState } from './ingest'
 
 /** A media file on disk the editor may read, served as `url` (lumen-media://file/…). */
@@ -71,7 +72,7 @@ export interface CollectResult {
 export interface CollectProgress {
   done: number
   total: number
-  /** The file being copied ('' when finished). */
+  /** The file being copied ('') when finished. */
   file: string
 }
 
@@ -142,6 +143,13 @@ export const APP_IPC = {
   projectReadVersion: 'lumen:project:read-version',
   projectSnapshot: 'lumen:project:snapshot',
   projectCollect: 'lumen:project:collect',
+
+  contextBankSync: 'lumen:context-bank:sync',
+  contextBankQuery: 'lumen:context-bank:query',
+  contextBankStatus: 'lumen:context-bank:status',
+  contextBankCopySaveAs: 'lumen:context-bank:copy-save-as',
+  contextBankClear: 'lumen:context-bank:clear',
+
   proxyBegin: 'lumen:files:proxy-begin',
   renderWrite: 'lumen:renders:write',
   renderList: 'lumen:renders:list',
@@ -297,6 +305,7 @@ export interface AppAPI {
     collect(name: string, text: string): Promise<CollectResult | null>
     onCollectProgress(cb: (p: CollectProgress) => void): () => void
   }
+  contextBank: ContextBankAPI
   export: {
     /** Save dialog (or folder picker, for image sequences) and open the file. Null if cancelled. */
     begin(opts: ExportRequest): Promise<ExportHandle | null>
