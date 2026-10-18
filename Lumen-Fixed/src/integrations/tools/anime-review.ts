@@ -1,7 +1,7 @@
 /** Anime review AI tools: reliable IDs and nested timeline inventory. */
-import { getProject } from '@/editor/store'
+import { getProject, useEditor } from '@/editor/store'
 import { inspectTimelines, listTimelineMarkers } from '@/editor/anime-timeline-operations'
-import { obj, str, type AgentTool } from './kit'
+import { obj, str, num, oneOf, type AgentTool } from './kit'
 
 export const ANIME_REVIEW_TOOLS: AgentTool[] = [
   {
@@ -18,5 +18,36 @@ export const ANIME_REVIEW_TOOLS: AgentTool[] = [
       sequence_id: typeof args.sequence_id === 'string' ? args.sequence_id : getProject().sequence?.id ?? 'main',
       markers: listTimelineMarkers(getProject(), typeof args.sequence_id === 'string' ? args.sequence_id : undefined),
     }),
-  },
+  },,
+  {
+    name: 'edit_timeline_marker',
+    description: 'Add, update or remove one marker by its stable ID on the open or nested timeline. Atomic, undoable and non-ripple: never moves clips. First call list_timeline_markers to identify the correct marker.',
+    inputSchema: obj({
+      operation: oneOf('Marker operation', ['add', 'update', 'remove']),
+      id: str('Exact marker ID. For add, choose a unique new ID.'),
+      sequence_id: str('Optional timeline ID; omit for open timeline.'),
+      frame: num('Timeline frame. Required for add, optional for update; never seconds.'),
+      label: str('Marker label. Required for add, optional for update.'),
+      color: oneOf('Optional marker colour', ['lime', 'violet', 'pink', 'amber', 'emerald', 'sky']),
+    }, ['operation', 'id']),
+    run: async args => {
+      const op = args.operation
+      const id = args.id
+      if (typeof id !== 'string' || !id.trim()) throw new Error('Marker ID required')
+      const sequenceId = typeof args.sequence_id === 'string' ? args.sequence_id : undefined
+      const frame = typeof args.frame === 'number' ? args.frame : undefined
+      const label = typeof args.label === 'string' ? args.label : undefined
+      const color = typeof args.color === 'string' ? args.color as 'lime' | 'violet' | 'pink' | 'amber' | 'emerald' | 'sky' : undefined
+      if (op === 'add' && (frame === undefined || label === undefined)) throw new Error('Add requires frame and label')
+      if (op !== 'add' && op !== 'update' && op !== 'remove') throw new Error('Unknown marker operation')
+      const change = op === 'add'
+        ? { op: 'add' as const, id, frame: frame!, label: label!, color, sequenceId }
+        : op === 'remove'
+          ? { op: 'remove' as const, id, sequenceId }
+          : { op: 'update' as const, id, frame, label, color, sequenceId }
+      const result = useEditor.getState().applyAiMarkerChanges([change])
+      if (!result.ok) throw new Error(result.error)
+      return { ok: true, ...result.result as object, undoable: true }
+    },
+  }
 ]
