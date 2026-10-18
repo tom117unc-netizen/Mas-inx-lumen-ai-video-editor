@@ -1,7 +1,9 @@
 import { app, BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { APP_IPC, type MediaFolder } from '../shared/app'
+import type { ContextBankQuery, ContextBankSyncRequest } from '../shared/context-bank'
 import path from 'node:path'
 import { collectProject } from './collect'
+import { clearContextBank, copyContextBankForSaveAs, openContextBank } from './context-bank'
 import { abortExport, beginExport, beginFile, finishExport, forgetPicked, openPicked, pickExport, restartExport, writeExport, writeFrame, writeSidecar, type ExportRequest } from './export'
 import { mediaRoot } from './integrations/paths'
 import { listVersions } from './versions'
@@ -80,6 +82,32 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
   handle(APP_IPC.confirmDiscard, (win, name: unknown) => confirmDiscard(win, str(name) || 'Untitled'))
   on(APP_IPC.projectState, (win, state: unknown) => setProjectState(win, (state ?? {}) as Record<string, unknown>))
   on(APP_IPC.closeWindow, (win) => closeNow(win))
+
+  handle(APP_IPC.contextBankSync, (_win, value: unknown) => {
+    const request = value as Partial<ContextBankSyncRequest>
+    const projectPath = str(request?.projectPath)
+    const mirror = request?.mirror
+    const projectId = mirror && typeof mirror === 'object' ? str((mirror as { projectId?: unknown }).projectId) : ''
+    if (!projectPath || !projectId || !mirror) throw new Error('Invalid Context Bank sync request')
+    const store = openContextBank(projectPath, projectId)
+    try { return store.sync(request as ContextBankSyncRequest) } finally { store.close() }
+  })
+  handle(APP_IPC.contextBankQuery, (_win, value: unknown) => {
+    const request = value as Partial<ContextBankQuery>
+    const projectPath = str(request?.projectPath)
+    const projectId = str(request?.projectId)
+    if (!projectPath || !projectId || typeof request?.purpose !== 'string') throw new Error('Invalid Context Bank query request')
+    const store = openContextBank(projectPath, projectId)
+    try { return store.query(request as ContextBankQuery) } finally { store.close() }
+  })
+  handle(APP_IPC.contextBankStatus, (_win, projectPath: unknown, projectId: unknown) => {
+    const store = openContextBank(str(projectPath), str(projectId))
+    try { return store.status() } finally { store.close() }
+  })
+  handle(APP_IPC.contextBankCopySaveAs, (_win, projectId: unknown, fromProjectPath: unknown, toProjectPath: unknown) =>
+    copyContextBankForSaveAs(str(projectId), str(fromProjectPath), str(toProjectPath)),
+  )
+  handle(APP_IPC.contextBankClear, (_win, projectPath: unknown, projectId: unknown) => clearContextBank(str(projectPath), str(projectId)))
 
   const request = (opts: unknown): ExportRequest => {
     const o = (opts ?? {}) as { defaultName?: unknown; extension?: unknown; filterName?: unknown; folder?: unknown }
