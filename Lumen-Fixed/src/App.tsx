@@ -29,6 +29,7 @@ import { Timeline } from '@/features/timeline/Timeline'
 import { startAi } from '@/integrations/ai'
 import { startBridgeClient } from '@/integrations/bridge'
 import { startIntegrations } from '@/integrations/store'
+import { startContextBankRuntime } from '@/project/context-bank-runtime'
 import { startIngestClient } from '@/project/ingest'
 import { startUpdates } from '@/lib/updates'
 
@@ -36,6 +37,7 @@ export function App() {
   useGlobalShortcuts()
   useEffect(() => {
     void startSession()
+    startContextBankRuntime()
     startMediaEngine()
     startTimelineNav()
     // Blender, HyperFrames and MCP live in the desktop app's main process.
@@ -119,4 +121,3 @@ function Editor() {
     </main>
   )
 }
-
