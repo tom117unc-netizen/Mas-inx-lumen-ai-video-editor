@@ -72,11 +72,12 @@ describe('committed editor events', () => {
   it('emits undo, redo and load with the resulting revision', () => {
     dispatch('marker.add', { frame: 5 })
     events.length = 0
+    const before = useEditor.getState().version
     useEditor.getState().undo()
     useEditor.getState().redo()
     useEditor.getState().loadProject(createEmptyProject('Another project'))
     expect(events.map(event => event.kind)).toEqual(['undo', 'redo', 'load'])
-    expect(events.map(event => event.revision)).toEqual([2, 3, 4])
+    expect(events.map(event => event.revision)).toEqual([before + 1, before + 2, before + 3])
   })
 
   it('reports direct AI marker commits through the same stream', () => {
