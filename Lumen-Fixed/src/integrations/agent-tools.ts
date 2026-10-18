@@ -702,7 +702,7 @@ function mcpAgentTools(servers: Record<string, McpServerState>): AgentTool[] {
 
 let cache: AgentTool[] | null = null
 export function agentTools(servers: Record<string, McpServerState> = useIntegrations.getState().servers): AgentTool[] {
-  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...ANIME_REVIEW_TOOLS, ...editorTools()]
+  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...ANIME_REVIEW_TOOLS, ...editorTools()].filter((tool): tool is AgentTool => Boolean(tool && typeof tool.name === 'string'))
   const mcp = mcpAgentTools(servers)
   return mcp.length ? [...cache, ...mcp] : cache
 }
