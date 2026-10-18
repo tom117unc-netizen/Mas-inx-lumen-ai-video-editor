@@ -1,0 +1,122 @@
+/** Audio-driven PNGTuber mouth-state planner for anime commentary.
+ * Pure functions: no editor mutation, no assumptions about image naming.
+ * Inputs are measured amplitude peaks aligned to a commentary clip's SOURCE timeline.
+ */
+export type MouthState = 'closed' | 'open'
+export interface AudioPeakSeries {
+  /** Normalized absolute amplitude per sample window (0..1). */
+  peaks: number[]
+  /** Number of amplitude windows per second. */
+  peaksPerSecond: number
+}
+export interface CommentaryPlacement {
+  /** Project frame at which this commentary clip starts. */
+  timelineStartFrame: number
+  /** Visible clip length in project frames. */
+  durationFrames: number
+  /** Source audio offset in seconds. */
+  sourceInSeconds: number
+  /** Playback speed (source seconds per timeline second). */
+  speed?: number
+}
+export interface MouthSyncOptions {
+  fps: number
+  /** Open when the smoothed amplitude rises above this level. */
+  openThreshold?: number
+  /** Close below this level; lower than openThreshold prevents chatter. */
+  closeThreshold?: number
+  /** Sliding average window in milliseconds. */
+  smoothingMs?: number
+  /** Minimum duration of a state before changing, in frames. */
+  minimumHoldFrames?: number
+  /** Additional delay to compensate for sprite or audio latency, in milliseconds. */
+  offsetMs?: number
+}
+export interface MouthInterval {
+  startFrame: number
+  endFrame: number
+  state: MouthState
+}
+export interface SpriteReplacement {
+  clipId: string
+  previousAssetId: string
+  replacementAssetId: string
+  /** Sprite replacements keep all existing timing, transforms and effects. */
+  preserveTiming: true
+}
+const finite = (n: number) => Number.isFinite(n)
+const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
+
+/** Convert source-aligned audio peaks into frame-exact, contiguous mouth intervals.
+ * The returned intervals cover the commentary placement exactly, with no gaps.
+ * The editor can turn these into sprite visibility changes after user approval.
+ */
+export function planMouthSync(
+  signal: AudioPeakSeries,
+  placement: CommentaryPlacement,
+  options: MouthSyncOptions,
+): MouthInterval[] {
+  const { fps } = options
+  if (!finite(fps) || fps <= 0 || fps > 240) throw new Error('Invalid project frame rate')
+  if (!finite(signal.peaksPerSecond) || signal.peaksPerSecond <= 0) throw new Error('Invalid peak sampling rate')
+  if (!Number.isSafeInteger(placement.timelineStartFrame) || placement.timelineStartFrame < 0) throw new Error('Invalid timeline start')
+  if (!Number.isSafeInteger(placement.durationFrames) || placement.durationFrames < 0) throw new Error('Invalid clip duration')
+  if (!finite(placement.sourceInSeconds) || placement.sourceInSeconds < 0) throw new Error('Invalid source in-point')
+  const speed = placement.speed ?? 1
+  if (!finite(speed) || speed <= 0) throw new Error('Reversed or non-positive audio playback is unsupported')
+  const open = options.openThreshold ?? 0.12
+  const close = options.closeThreshold ?? 0.075
+  if (!finite(open) || !finite(close) || close < 0 || open > 1 || close >= open) throw new Error('Invalid hysteresis thresholds')
+  const smoothingMs = options.smoothingMs ?? 45
+  const offsetMs = options.offsetMs ?? 0
+  const hold = options.minimumHoldFrames ?? 2
+  if (!finite(smoothingMs) || smoothingMs < 0 || smoothingMs > 1000 || !finite(offsetMs) || Math.abs(offsetMs) > 5000 || !Number.isSafeInteger(hold) || hold < 1) throw new Error('Invalid sync timing')
+  const start = placement.timelineStartFrame
+  const end = start + placement.durationFrames
+  if (!Number.isSafeInteger(end)) throw new Error('Timeline exceeds safe integer range')
+  if (start === end) return []
+  const radius = Math.floor(smoothingMs * signal.peaksPerSecond / 2000)
+  const sample = (index: number): number => {
+    if (index < 0 || index >= signal.peaks.length) return 0
+    const value = signal.peaks[index]
+    return finite(value) ? clamp(value, 0, 1) : 0
+  }
+  const amplitude = (time: number) => {
+    const center = Math.floor(time * signal.peaksPerSecond)
+    let total = 0
+    for (let i = center - radius; i <= center + radius; i++) total += sample(i)
+    return total / (2 * radius + 1)
+  }
+  const output: MouthInterval[] = []
+  let state: MouthState = 'closed'
+  let segmentStart = start
+  for (let frame = start; frame < end; frame++) {
+    const sourceTime = placement.sourceInSeconds + ((frame - start) / fps + offsetMs / 1000) * speed
+    const level = amplitude(sourceTime)
+    const desired: MouthState = state === 'closed' ? (level >= open ? 'open' : 'closed') : (level <= close ? 'closed' : 'open')
+    if (desired !== state && (frame - segmentStart >= hold || frame === start)) {
+      if (frame > segmentStart) output.push({ startFrame: segmentStart, endFrame: frame, state })
+      segmentStart = frame
+      state = desired
+    }
+  }
+  output.push({ startFrame: segmentStart, endFrame: end, state })
+  return output
+}
+
+/** Map old sprite assets to their B-version equivalents without guessing names.
+ * Caller must provide an explicit mapping and review before committing.
+ */
+export function planSpriteVersionReplacement(
+  clips: ReadonlyArray<{ id: string; assetId?: string }>,
+  assetMap: Readonly<Record<string, string>>,
+): SpriteReplacement[] {
+  const result: SpriteReplacement[] = []
+  for (const clip of clips) {
+    if (!clip.assetId || !Object.prototype.hasOwnProperty.call(assetMap, clip.assetId)) continue
+    const next = assetMap[clip.assetId]
+    if (!next || next === clip.assetId) continue
+    result.push({ clipId: clip.id, previousAssetId: clip.assetId, replacementAssetId: next, preserveTiming: true })
+  }
+  return result
+}
