@@ -1,0 +1,23 @@
+name: Anime review feature CI
+
+on:
+  push:
+    branches: [feature/anime-review-update-02]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: Lumen-Fixed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: Lumen-Fixed/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
