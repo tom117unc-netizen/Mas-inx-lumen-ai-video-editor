@@ -27,6 +27,18 @@ export interface HistoryEntry {
   at: number
 }
 
+export type CommittedEditKind = 'dispatch' | 'transaction' | 'undo' | 'redo' | 'load'
+
+/** One durable editor boundary the Context Bank can mirror without observing half-finished edits. */
+export interface CommittedEditEvent {
+  kind: CommittedEditKind
+  revision: number
+  historyId?: number
+  label?: string
+  source?: ActionSource
+  at: number
+}
+
 export interface DispatchOptions {
   source?: ActionSource
   label?: string
@@ -62,6 +74,29 @@ const COALESCE_MS = 1200
 
 let openTransaction: HistoryEntry | null = null
 let nextEntryId = 1
+const committedListeners = new Set<(event: CommittedEditEvent) => void>()
+
+function emitCommitted(kind: CommittedEditKind, revision: number, entry?: HistoryEntry) {
+  const event: CommittedEditEvent = {
+    kind,
+    revision,
+    ...(entry ? { historyId: entry.id, label: entry.label, source: entry.source } : {}),
+    at: Date.now(),
+  }
+  for (const listener of committedListeners) {
+    try {
+      listener(event)
+    } catch (error) {
+      console.warn('Committed edit listener failed', error)
+    }
+  }
+}
+
+/** Subscribe to successful durable edit boundaries. Background-derived changes are intentionally omitted. */
+export function subscribeCommittedEdits(listener: (event: CommittedEditEvent) => void) {
+  committedListeners.add(listener)
+  return () => void committedListeners.delete(listener)
+}
 
 /** Fills in fields added since a project was saved, so older projects keep working. */
 export function migrateProject(p: Project): Project {
@@ -134,6 +169,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
     if (opts.coalesce && last?.key === opts.coalesce && now - last.at < COALESCE_MS) {
       const merged: HistoryEntry = { ...last, patches: [...last.patches, ...patches], inverse: [...inverse, ...last.inverse], at: now }
       set({ project: next, past: [...past.slice(0, -1), merged], future: [], version })
+      emitCommitted('dispatch', version, merged)
     } else {
       const entry: HistoryEntry = {
         id: nextEntryId++,
@@ -145,6 +181,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
         at: now,
       }
       set({ project: next, past: [...past, entry].slice(-HISTORY_LIMIT), future: [], version })
+      emitCommitted('dispatch', version, entry)
     }
     return { ok: true, result }
   },
@@ -199,7 +236,9 @@ export const useEditor = create<EditorState>()((set, get) => ({
       id: nextEntryId++, label: 'Apply approved anime review edits', source: 'ai',
       patches, inverse, at: performance.now(),
     }
-    set(s => ({ project: next, past: [...s.past, entry].slice(-HISTORY_LIMIT), future: [], version: s.version + 1 }))
+    const version = get().version + 1
+    set(s => ({ project: next, past: [...s.past, entry].slice(-HISTORY_LIMIT), future: [], version }))
+    emitCommitted('dispatch', version, entry)
     return { ok: true, result: { changes: proposal.changes.length } }
   },
   applyAiMarkerChanges(changes) {
@@ -225,17 +264,21 @@ export const useEditor = create<EditorState>()((set, get) => ({
       id: nextEntryId++, label: 'AI marker edits', source: 'ai',
       patches, inverse, at: performance.now(),
     }
+    const version = get().version + 1
     set(state => ({
       project: next, past: [...state.past, entry].slice(-HISTORY_LIMIT),
-      future: [], version: state.version + 1,
+      future: [], version,
     }))
+    emitCommitted('dispatch', version, entry)
     return { ok: true, result: { changes: changes.length } }
   },
   undo() {
     const { past, future, project, version } = get()
     const entry = past[past.length - 1]
     if (!entry) return undefined
-    set({ project: applyPatches(project, entry.inverse), past: past.slice(0, -1), future: [entry, ...future], version: version + 1 })
+    const nextVersion = version + 1
+    set({ project: applyPatches(project, entry.inverse), past: past.slice(0, -1), future: [entry, ...future], version: nextVersion })
+    emitCommitted('undo', nextVersion, entry)
     return entry
   },
 
@@ -243,13 +286,17 @@ export const useEditor = create<EditorState>()((set, get) => ({
     const { past, future, project, version } = get()
     const entry = future[0]
     if (!entry) return undefined
-    set({ project: applyPatches(project, entry.patches), past: [...past, entry], future: future.slice(1), version: version + 1 })
+    const nextVersion = version + 1
+    set({ project: applyPatches(project, entry.patches), past: [...past, entry], future: future.slice(1), version: nextVersion })
+    emitCommitted('redo', nextVersion, entry)
     return entry
   },
 
   loadProject(project) {
     normalizeProject(project)
-    set({ project, past: [], future: [], version: get().version + 1 })
+    const version = get().version + 1
+    set({ project, past: [], future: [], version })
+    emitCommitted('load', version)
   },
 }))
 
@@ -269,6 +316,7 @@ export function endTransaction(): HistoryEntry | null {
   openTransaction = null
   if (!entry || !entry.patches.length) return null
   useEditor.setState((s) => ({ past: [...s.past, entry].slice(-HISTORY_LIMIT), future: [] }))
+  emitCommitted('transaction', useEditor.getState().version, entry)
   return entry
 }
 
