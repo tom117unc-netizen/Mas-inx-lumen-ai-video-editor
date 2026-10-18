@@ -7,6 +7,7 @@ import { create } from 'zustand'
 import { commands, CommandError, type AnyCommand, type CommandInput, type CommandName } from './commands'
 import { DEFAULT_TEXT, DEFAULT_TRANSFORM } from './defaults'
 import { createEmptyProject } from './new-project'
+import { verifyApprovedProposal, type ReviewProposal } from './anime-review-approval'
 import { normalizeProject } from './ops'
 import type { Clip, Project } from './types'
 
@@ -47,6 +48,7 @@ interface EditorState {
   dispatch: <N extends CommandName>(name: N, input: CommandInput<N>, opts?: DispatchOptions) => DispatchResult
   /** Groups every dispatch inside `fn` into a single undo step. */
   transaction: (label: string, source: ActionSource, fn: () => void) => HistoryEntry | null
+  approveAiProposal: (proposal: ReviewProposal) => DispatchResult
   undo: () => HistoryEntry | undefined
   redo: () => HistoryEntry | undefined
   /** Replaces the document (open / new project) and clears history. */
@@ -160,6 +162,44 @@ export const useEditor = create<EditorState>()((set, get) => ({
     return endTransaction()
   },
 
+  approveAiProposal(proposal) {
+    if (openTransaction) return { ok: false, error: 'Finish the current edit transaction first' }
+    const before = get().project
+    let next: Project
+    let patches: Patch[]
+    let inverse: Patch[]
+    try {
+      const approved = verifyApprovedProposal(before, proposal)
+      ;[next, patches, inverse] = produceWithPatches(before, (draft) => {
+        for (const edit of proposal.patch.edits) {
+          const openId = draft.sequence?.id ?? 'main'
+          const dest = edit.sequenceId === openId ? draft : draft.sequences?.[edit.sequenceId]
+          const source = edit.sequenceId === openId ? approved : approved.sequences?.[edit.sequenceId]
+          if (!dest || !source) throw new Error('Sequence missing during commit')
+          if (edit.op === 'setTrack') {
+            const index = dest.tracks.findIndex(t => t.id === edit.trackId)
+            const updated = source.tracks.find(t => t.id === edit.trackId)
+            if (index < 0 || !updated) throw new Error('Track missing during commit')
+            dest.tracks[index] = structuredClone(updated)
+          } else {
+            const updated = source.clips[edit.clipId]
+            if (!updated) throw new Error('Clip missing during commit')
+            dest.clips[edit.clipId] = structuredClone(updated)
+          }
+        }
+        normalizeProject(draft, before)
+      })
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+    if (!patches.length) return { ok: true, result: { changes: 0 } }
+    const entry: HistoryEntry = {
+      id: nextEntryId++, label: 'Apply approved anime review edits', source: 'ai',
+      patches, inverse, at: performance.now(),
+    }
+    set(s => ({ project: next, past: [...s.past, entry].slice(-HISTORY_LIMIT), future: [], version: s.version + 1 }))
+    return { ok: true, result: { changes: proposal.changes.length } }
+  },
   undo() {
     const { past, future, project, version } = get()
     const entry = past[past.length - 1]
