@@ -146,6 +146,13 @@ const appApi: AppAPI = {
     collect: (name, text) => invoke(APP_IPC.projectCollect, name, text),
     onCollectProgress: (cb) => subscribe<CollectProgress>(APP_IPC.collectProgress, cb),
   },
+  contextBank: {
+    sync: (request) => invoke(APP_IPC.contextBankSync, request),
+    query: (request) => invoke(APP_IPC.contextBankQuery, request),
+    status: (projectPath, projectId) => invoke(APP_IPC.contextBankStatus, projectPath, projectId),
+    copyForSaveAs: (projectId, fromProjectPath, toProjectPath) => invoke(APP_IPC.contextBankCopySaveAs, projectId, fromProjectPath, toProjectPath),
+    clear: (projectPath, projectId) => invoke(APP_IPC.contextBankClear, projectPath, projectId),
+  },
   export: {
     begin: (opts) => invoke(APP_IPC.exportBegin, opts),
     pick: (opts) => invoke(APP_IPC.exportPick, opts),
