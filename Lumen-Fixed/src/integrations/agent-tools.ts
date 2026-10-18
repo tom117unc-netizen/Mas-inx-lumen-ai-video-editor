@@ -33,6 +33,7 @@ import { SKILL_TOOLS } from './tools/skills'
 import { SUBJECT_TOOLS } from './tools/subject'
 import { INGEST_TOOLS } from './tools/ingest'
 import { WEB_TOOLS } from './tools/web'
+import { ANIME_REVIEW_TOOLS } from './tools/anime-review'
 
 const PLACE = bool('Put the finished clip on the timeline at the playhead (default true).')
 const WAIT = num('Seconds to wait for the render before returning (default 90, max 600; through Lumen’s MCP server at most 15). If it is still running, poll get_job.', { minimum: 0, maximum: 600 })
@@ -701,7 +702,7 @@ function mcpAgentTools(servers: Record<string, McpServerState>): AgentTool[] {
 
 let cache: AgentTool[] | null = null
 export function agentTools(servers: Record<string, McpServerState> = useIntegrations.getState().servers): AgentTool[] {
-  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...editorTools()]
+  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...ANIME_REVIEW_TOOLS, ...editorTools()]
   const mcp = mcpAgentTools(servers)
   return mcp.length ? [...cache, ...mcp] : cache
 }
