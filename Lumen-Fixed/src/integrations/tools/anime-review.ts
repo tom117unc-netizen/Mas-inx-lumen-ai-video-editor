@@ -18,7 +18,7 @@ export const ANIME_REVIEW_TOOLS: AgentTool[] = [
       sequence_id: typeof args.sequence_id === 'string' ? args.sequence_id : getProject().sequence?.id ?? 'main',
       markers: listTimelineMarkers(getProject(), typeof args.sequence_id === 'string' ? args.sequence_id : undefined),
     }),
-  },,
+  },
   {
     name: 'edit_timeline_marker',
     description: 'Add, update or remove one marker by its stable ID on the open or nested timeline. Atomic, undoable and non-ripple: never moves clips. First call list_timeline_markers to identify the correct marker.',
