@@ -11,6 +11,7 @@ import type {
   ContextBankStatus,
   ContextBankSyncRequest,
 } from '../shared/context-bank'
+import { fingerprintSourceFile } from './context-bank-fingerprint'
 
 const SCHEMA_VERSION = 1
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -46,6 +47,14 @@ function operationId(mutation: NonNullable<ContextBankSyncRequest['mutation']>) 
   return mutation.historyId !== undefined
     ? `${mutation.kind}:history:${mutation.historyId}`
     : `${mutation.kind}:revision:${mutation.revision}`
+}
+
+interface ExistingSource {
+  asset_id: string
+  path: string
+  size: number | bigint
+  mtime: number | null
+  fingerprint: string | null
 }
 
 export interface ContextBankStore {
@@ -159,18 +168,39 @@ class SqliteContextBankStore implements ContextBankStore {
     if (request.mirror.projectId !== this.projectId) throw new Error('Context Bank sync project id mismatch')
     if (request.mirror.version !== 1 || request.mirror.format !== 'lumen-context-mirror') throw new Error('Unsupported Context Bank mirror version')
 
+    const previousSources = new Map(
+      (this.db.prepare('SELECT asset_id,path,size,mtime,fingerprint FROM source_assets').all() as ExistingSource[])
+        .map(row => [row.asset_id, row] as const),
+    )
+
     this.db.exec('BEGIN IMMEDIATE')
     try {
       this.db.exec('DELETE FROM timeline_clips; DELETE FROM timeline_markers; DELETE FROM source_assets;')
       const insertAsset = this.db.prepare(`
-        INSERT INTO source_assets(asset_id,name,kind,duration,width,height,fps,has_audio,path,file_name,mime,size,mtime,missing)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO source_assets(asset_id,name,kind,duration,width,height,fps,has_audio,path,file_name,mime,size,mtime,missing,fingerprint)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       `)
       for (const asset of request.mirror.assets) {
+        const previous = previousSources.get(asset.id)
+        const sameIdentity = Boolean(
+          previous?.fingerprint
+          && samePath(previous.path, asset.path)
+          && Number(previous.size) === asset.size
+          && (previous.mtime === null ? asset.mtime === undefined : Number(previous.mtime) === asset.mtime),
+        )
+        let fingerprint = sameIdentity ? previous!.fingerprint : null
+        if (!fingerprint && !asset.missing) {
+          try {
+            fingerprint = fingerprintSourceFile(asset.path).fingerprint
+          } catch {
+            // Media can disappear between the renderer mirror and this sync.
+            // Keep the canonical timeline mirrored and leave fingerprint unknown.
+          }
+        }
         insertAsset.run(
           asset.id, asset.name, asset.kind, asset.duration ?? null, asset.width ?? null, asset.height ?? null,
           asset.fps ?? null, bool(asset.hasAudio), asset.path, asset.fileName, asset.mime, asset.size,
-          asset.mtime ?? null, asset.missing ? 1 : 0,
+          asset.mtime ?? null, asset.missing ? 1 : 0, fingerprint,
         )
       }
       const insertClip = this.db.prepare(`
