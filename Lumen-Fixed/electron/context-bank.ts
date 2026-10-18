@@ -362,11 +362,21 @@ export function copyContextBankForSaveAs(projectId: string, fromProjectPath: str
   const source = contextBankPath(fromProjectPath, projectId)
   const target = contextBankPath(toProjectPath, projectId)
   if (!fs.existsSync(source)) return
-  fs.mkdirSync(path.dirname(target), { recursive: true })
-  fs.copyFileSync(source, target)
-  for (const suffix of ['-wal', '-shm']) {
-    if (fs.existsSync(source + suffix)) fs.copyFileSync(source + suffix, target + suffix)
+
+  // Flush committed WAL pages into the main database before copying. Sync writes are
+  // serialized before Save As, so this connection only needs to checkpoint an idle DB.
+  const checkpoint = new DatabaseSync(source)
+  try {
+    checkpoint.exec('PRAGMA busy_timeout=5000; PRAGMA wal_checkpoint(TRUNCATE);')
+  } finally {
+    checkpoint.close()
   }
+
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.rmSync(target, { force: true })
+  fs.rmSync(`${target}-wal`, { force: true })
+  fs.rmSync(`${target}-shm`, { force: true })
+  fs.copyFileSync(source, target)
 }
 
 export function clearContextBank(projectPath: string, projectId: string) {
