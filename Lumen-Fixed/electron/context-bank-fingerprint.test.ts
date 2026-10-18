@@ -45,7 +45,7 @@ describe('fingerprintSourceFile', () => {
     const result = fingerprintSourceFile(file)
     expect(result.size).toBe(size)
     expect(readWhole).not.toHaveBeenCalled()
-    const requested = read.mock.calls.reduce((sum, call) => sum + Number(call[3] ?? 0), 0)
+    const requested = read.mock.calls.reduce((sum, call) => sum + call[1].byteLength, 0)
     expect(requested).toBeLessThanOrEqual(2 * 1024 * 1024)
     expect(read.mock.calls.length).toBeLessThanOrEqual(2)
   })
