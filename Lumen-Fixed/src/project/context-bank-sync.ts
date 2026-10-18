@@ -25,6 +25,8 @@ export function createContextBankSynchronizer(
   snapshot: () => ContextBankSyncSnapshot,
   onError: (error: unknown) => void = error => console.warn('Context Bank sync failed', error),
 ): ContextBankSynchronizer {
+  // `tail` is always resolved: each individual caller still receives its own rejecting
+  // promise, while the queue catches that rejection before scheduling the next write.
   let tail: Promise<void> = Promise.resolve()
 
   const enqueue = (event?: CommittedEditEvent): Promise<void> => {
@@ -50,11 +52,10 @@ export function createContextBankSynchronizer(
     }
 
     const run = tail
-      .catch(() => {})
       .then(() => api.sync(request))
       .then(() => {})
-    // Keep the queue usable after an individual write fails, while preserving the
-    // rejecting promise for the caller that initiated that particular write.
+    // Preserve failure for this caller, but make the queue itself recover so later
+    // commits are never blocked by an earlier transient disk/IPC error.
     tail = run.catch(error => { onError(error) })
     return run
   }
