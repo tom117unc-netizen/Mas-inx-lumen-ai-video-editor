@@ -104,6 +104,15 @@ export function transcribeMedia(assetId: string, opts: { using?: Transcriber; la
     const segments = using === 'openai' ? await withOpenAI(buffer, opts.language) : await transcribeLocally(buffer, { language: opts.language, onProgress: opts.onProgress })
     if (getProject().assets[assetId]) {
       dispatch('asset.update', { id: assetId, patch: { transcript: segments } }, { source: 'ai', label: 'Add transcript' })
+      await persistTranscriptAnalysis(assetId, {
+        provider: using,
+        model: using === 'openai' ? 'whisper' : 'local-whisper',
+        ...(opts.language ? { language: opts.language } : {}),
+        analysisVersion: 'lumen-transcribe-phrases-v1',
+        words: [],
+        segments,
+        createdAt: Date.now(),
+      })
     }
     return segments
   })().finally(() => inFlight.delete(assetId))
