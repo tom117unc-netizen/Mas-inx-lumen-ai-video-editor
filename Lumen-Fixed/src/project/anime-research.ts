@@ -33,6 +33,7 @@ const PAGE_LIMIT = CONTEXT_BANK_RESEARCH_SEED_SOURCES_MAX
 const SOURCE_TEXT_LIMIT = CONTEXT_BANK_RESEARCH_SOURCE_TEXT_MAX
 const CHUNK_LIMIT = CONTEXT_BANK_RESEARCH_SEED_CHUNKS_MAX
 const TRANSIENT_RETRY_DELAYS_MS = [250, 750] as const
+const SNIPPET_FALLBACK_NOTICE = 'Search-result snippet only; full page could not be read. Treat as lower-confidence locator evidence.'
 
 type ResearchSleep = (milliseconds: number) => Promise<void>
 
@@ -204,6 +205,45 @@ async function sourceAndChunks(page: WebPage, retrievedAt: number): Promise<{ so
   return { source, chunks }
 }
 
+async function sourceAndChunksFromSearchResult(result: WebSearchResult, retrievedAt: number): Promise<{ source: ContextBankResearchSource; chunks: ContextBankResearchChunk[] } | null> {
+  const url = normalizedUrl(result.url)
+  const snippet = String(result.snippet ?? '').trim()
+  if (!url || !snippet) return null
+
+  const title = String(result.title ?? '').trim()
+  const text = [
+    SNIPPET_FALLBACK_NOTICE,
+    title ? `Result title: ${title}` : '',
+    snippet,
+  ].filter(Boolean).join('\n').slice(0, SOURCE_TEXT_LIMIT).trim()
+  if (!text) return null
+
+  const sourceId = `web-${(await sha256(url)).slice(0, 32)}`
+  let site: string | undefined
+  try {
+    site = new URL(url).hostname
+  } catch {
+    site = undefined
+  }
+  const source: ContextBankResearchSource = {
+    id: sourceId,
+    url,
+    ...(title ? { title: title.slice(0, 500) } : {}),
+    ...(site ? { site: site.slice(0, 256) } : {}),
+    retrievedAt,
+    contentHash: await sha256(text),
+    text,
+  }
+
+  const rawChunks = splitPageIntoChunks(sourceId, text)
+  const chunks: ContextBankResearchChunk[] = []
+  for (const chunk of rawChunks) {
+    const id = `chunk-${(await sha256(`${sourceId}:${chunk.ordinal}:${chunk.text}`)).slice(0, 32)}`
+    chunks.push({ id, ...chunk })
+  }
+  return chunks.length ? { source, chunks } : null
+}
+
 function state(showQuery: string, status: ContextBankResearchState['status'], updatedAt: number, patch: Partial<ContextBankResearchState> = {}): ContextBankResearchState {
   return { showQuery, status, updatedAt, ...patch }
 }
@@ -290,7 +330,20 @@ export async function seedAnimeResearchForProject(
       if (sources.length >= PAGE_LIMIT || chunks.length >= CHUNK_LIMIT) break
     }
 
-    if (!sources.length) throw new Error('No usable research pages were found')
+    if (!sources.length) {
+      for (const result of results.slice(0, PAGE_LIMIT)) {
+        const built = await sourceAndChunksFromSearchResult(result, now())
+        if (!built) continue
+        sources.push(built.source)
+        for (const chunk of built.chunks) {
+          if (chunks.length >= CHUNK_LIMIT) break
+          chunks.push(chunk)
+        }
+        if (sources.length >= PAGE_LIMIT || chunks.length >= CHUNK_LIMIT) break
+      }
+    }
+
+    if (!sources.length) throw new Error('No usable research pages or search-result snippets were found')
 
     const ready = state(setup.showQuery, 'ready', now(), { identity })
     await bank.replaceResearchSeed({ ...location, state: ready, sources, chunks })
