@@ -136,9 +136,14 @@ describe('Context Bank source observations', () => {
       invalid.confidence = 1.5
       expect(() => store.putObservations({ projectPath, projectId: 'project-1', assetId: 'asset-1', observations: [invalid] })).toThrow(/confidence/i)
 
-      const nested = observation('bad-meta', 2, 3) as ContextBankObservationInput & { provenance: ContextBankObservationInput['provenance'] & { metadata: Record<string, unknown> } }
-      nested.provenance.metadata = { nested: { not: 'primitive' } }
-      expect(() => store.putObservations({ projectPath, projectId: 'project-1', assetId: 'asset-1', observations: [nested as ContextBankObservationInput] })).toThrow(/metadata|primitive/i)
+      const nested = observation('bad-meta', 2, 3)
+      ;(nested.provenance as unknown as { metadata: unknown }).metadata = { nested: { not: 'primitive' } }
+      expect(() => store.putObservations({
+        projectPath,
+        projectId: 'project-1',
+        assetId: 'asset-1',
+        observations: [nested as unknown as ContextBankObservationInput],
+      })).toThrow(/metadata|primitive/i)
       expect(store.getObservations(query(projectPath)).observations).toEqual([])
     } finally {
       store.close()
