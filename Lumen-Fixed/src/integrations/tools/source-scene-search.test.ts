@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Asset, Project } from '@/editor/types'
-import type { ContextBankObservationInput } from '@shared/context-bank-analysis'
+import type { ContextBankObservationInput, ContextBankObservationQuery } from '@shared/context-bank-analysis'
+import type { ContextBankResearchSearchRequest } from '@shared/context-bank-research'
 import { createEmptyProject } from '@/editor/new-project'
 
 const mocks = vi.hoisted(() => ({
@@ -8,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   project: null as unknown as Project,
   order: [] as string[],
   flush: vi.fn(async () => { mocks.order.push('flush') }),
-  searchResearch: vi.fn(async () => {
+  searchResearch: vi.fn(async (_request: ContextBankResearchSearchRequest) => {
     mocks.order.push('searchResearch')
     return {
       projectId: 'project-1',
@@ -27,7 +28,7 @@ const mocks = vi.hoisted(() => ({
       warnings: [],
     }
   }),
-  getObservations: vi.fn(async (request: { assetId: string }) => {
+  getObservations: vi.fn(async (request: ContextBankObservationQuery) => {
     mocks.order.push(`getObservations:${request.assetId}`)
     const observations: ContextBankObservationInput[] = request.assetId === 'ep5' ? [{
       id: 'verified-pudding',
@@ -133,7 +134,7 @@ describe('source scene-search planning tool', () => {
       expect(request.maxItems).toBeLessThanOrEqual(12)
       expect(request.maxCharacters).toBeLessThanOrEqual(4_000)
     }
-    const researchRequest = mocks.searchResearch.mock.calls[0]?.[0]
+    const researchRequest = mocks.searchResearch.mock.calls[0]![0]
     expect(researchRequest.maxItems).toBeLessThanOrEqual(12)
     expect(researchRequest.maxCharacters).toBeLessThanOrEqual(12_000)
     expect(result.candidates).toHaveLength(4)
