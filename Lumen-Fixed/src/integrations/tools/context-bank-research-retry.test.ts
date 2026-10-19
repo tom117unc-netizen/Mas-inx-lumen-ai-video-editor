@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   flush: vi.fn(async () => {}),
   saveProject: vi.fn(async () => true),
   recordIdentity: vi.fn(),
-  seed: vi.fn(async (_project: unknown, _projectPath: string, dependencies?: { allowRetry?: boolean }) => (
+  seed: vi.fn(async (_project: unknown, _projectPath: string, dependencies?: { allowRetry?: boolean; refreshReady?: boolean }) => (
     dependencies?.allowRetry
       ? { status: 'ready' as const }
       : { status: 'error' as const, error: 'older failure', retryable: true }
@@ -56,7 +56,7 @@ describe('configure_anime_review_project retry path', () => {
     mocks.seed.mockClear()
   })
 
-  it('forces a reseed when the same show already has a cached retryable research error', async () => {
+  it('forces an explicit reseed rather than replaying either retryable errors or an older ready pack', async () => {
     const configure = CONTEXT_BANK_RESEARCH_TOOLS.find(tool => tool.name === 'configure_anime_review_project')!
 
     const result = await configure.run({ show_query: 'Frieren' })
@@ -68,7 +68,7 @@ describe('configure_anime_review_project retry path', () => {
       research: { status: 'ready' },
     })
     expect(mocks.seed).toHaveBeenCalledTimes(1)
-    expect(mocks.seed.mock.calls[0]?.[2]).toMatchObject({ allowRetry: true })
+    expect(mocks.seed.mock.calls[0]?.[2]).toMatchObject({ allowRetry: true, refreshReady: true })
   })
 
   it('saves the current project after configuring research so anime-review metadata survives restart', async () => {
