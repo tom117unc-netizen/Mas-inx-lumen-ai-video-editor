@@ -4,6 +4,7 @@ import { inspectTimelines, listTimelineMarkers } from '@/editor/anime-timeline-o
 import { desktop } from '@/lib/platform'
 import { flushContextBankWrites } from '@/project/context-bank-runtime'
 import { useSession } from '@/project/session'
+import { CONTEXT_BANK_ANALYSIS_TOOLS } from './context-bank-analysis'
 import { makeContextBankQuery } from './context-bank-query'
 import { obj, str, num, int, oneOf, type AgentTool } from './kit'
 
@@ -74,4 +75,5 @@ export const ANIME_REVIEW_TOOLS: AgentTool[] = [
       return desktop.contextBank.query(request)
     },
   },
+  ...CONTEXT_BANK_ANALYSIS_TOOLS,
 ]
