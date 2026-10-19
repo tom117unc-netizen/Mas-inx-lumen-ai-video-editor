@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Project } from './types'
-import { applyPatches } from './project-patches'
+import { applyReviewProposal, createReviewProposal } from './anime-review-approval'
 import { planMouthSync, planSpriteVersionReplacement } from './anime-pngtuber-sync'
 
 describe('anime PNGTuber mouth planner', () => {
@@ -24,21 +24,26 @@ describe('anime PNGTuber mouth planner', () => {
       { clipId: 'clip1', previousAssetId: 'old', replacementAssetId: 'new', preserveTiming: true },
     ])
   })
-  it('applies a sprite asset swap without changing unrelated clip properties', () => {
+  it('applies an approved sprite asset swap without changing unrelated clip properties', () => {
     const project = {
+      id: 'project-1',
       clips: {
         clip1: { id: 'clip1', assetId: 'old', start: 42, duration: 90, opacity: 0.75 },
       },
       assets: { old: { id: 'old' }, new: { id: 'new' } },
+      markers: [],
+      sequences: {},
     } as unknown as Project
+    const proposal = createReviewProposal(project, 'Upgrade PNGTuber sprites to B', [
+      { op: 'setAsset', clipId: 'clip1', assetId: 'new' },
+    ])
 
-    const result = applyPatches(project, [{ op: 'setAsset', clipId: 'clip1', assetId: 'new' }])
+    const result = applyReviewProposal(project, proposal)
 
     expect(result.project.clips.clip1.assetId).toBe('new')
     expect(result.project.clips.clip1.start).toBe(42)
     expect(result.project.clips.clip1.duration).toBe(90)
     expect(result.project.clips.clip1.opacity).toBe(0.75)
-    expect(result.before).toEqual([{ op: 'setAsset', clipId: 'clip1', assetId: 'old' }])
   })
   it('rejects invalid sync thresholds', () => {
     expect(() => planMouthSync({ peaks: [], peaksPerSecond: 10 },
