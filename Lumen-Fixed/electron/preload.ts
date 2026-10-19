@@ -149,6 +149,10 @@ const appApi: AppAPI = {
   contextBank: {
     sync: (request) => invoke(APP_IPC.contextBankSync, request),
     query: (request) => invoke(APP_IPC.contextBankQuery, request),
+    putTranscript: (request) => invoke(APP_IPC.contextBankPutTranscript, request),
+    getTranscript: (query) => invoke(APP_IPC.contextBankGetTranscript, query),
+    putObservations: (request) => invoke(APP_IPC.contextBankPutObservations, request),
+    getObservations: (query) => invoke(APP_IPC.contextBankGetObservations, query),
     status: (projectPath, projectId) => invoke(APP_IPC.contextBankStatus, projectPath, projectId),
     copyForSaveAs: (projectId, fromProjectPath, toProjectPath) => invoke(APP_IPC.contextBankCopySaveAs, projectId, fromProjectPath, toProjectPath),
     clear: (projectPath, projectId) => invoke(APP_IPC.contextBankClear, projectPath, projectId),
