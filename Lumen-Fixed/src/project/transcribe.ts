@@ -4,13 +4,15 @@
  * OpenAI Whisper — or Whisper running on this computer (see ./whisper).
  */
 import { toast } from 'sonner'
-import type { TranscriptSegment } from '@shared/integrations'
+import type { Job, TranscriptSegment } from '@shared/integrations'
+import type { ElevenLabsScribeJobDetail } from '@shared/scribe'
 import { dispatch, getProject } from '@/editor/store'
 import type { Asset } from '@/editor/types'
 import { speechAudio } from '@/engine/audio-engine'
 import { speechWav } from '@/engine/wav'
 import { useAi } from '@/integrations/ai'
 import { api, transcribeAsset as elevenJob, useIntegrations } from '@/integrations/store'
+import { persistTranscriptAnalysis } from './context-bank-analysis'
 import { transcribeLocally } from './whisper'
 
 export type Transcriber = 'elevenlabs' | 'openai' | 'local'
@@ -48,16 +50,35 @@ async function withOpenAI(buffer: AudioBuffer, language?: string) {
   return out
 }
 
+type ScribeJob = Job & Partial<ElevenLabsScribeJobDetail>
+
 async function withElevenLabs(asset: Asset, language?: string): Promise<TranscriptSegment[]> {
   const job = await elevenJob(asset.id, language)
-  // The job attaches the transcript itself; wait for it.
+  // The integration store attaches the phrase transcript to the asset itself;
+  // this path only waits for completion and persists the supplementary detail.
   return new Promise((resolve, reject) => {
     const check = () => {
-      const j = useIntegrations.getState().jobs[job.id]
+      const j = useIntegrations.getState().jobs[job.id] as ScribeJob | undefined
       if (!j || j.status === 'running') return false
       unsub()
-      if (j.status === 'done' && j.transcript) resolve(j.transcript)
-      else reject(new Error(j.error ?? 'Transcription didn’t finish.'))
+      if (j.status === 'done' && j.transcript) {
+        const phrases = j.transcript
+        if (j.transcriptWords && j.transcriptMeta) {
+          void persistTranscriptAnalysis(asset.id, {
+            provider: j.transcriptMeta.provider,
+            model: j.transcriptMeta.model,
+            ...(j.transcriptMeta.language ? { language: j.transcriptMeta.language } : {}),
+            analysisVersion: j.transcriptMeta.analysisVersion,
+            words: j.transcriptWords,
+            segments: phrases,
+            createdAt: j.finishedAt ?? Date.now(),
+          }).then(() => resolve(phrases))
+          return true
+        }
+        resolve(phrases)
+      } else {
+        reject(new Error(j.error ?? 'Transcription didn’t finish.'))
+      }
       return true
     }
     const unsub = useIntegrations.subscribe(() => void check())
