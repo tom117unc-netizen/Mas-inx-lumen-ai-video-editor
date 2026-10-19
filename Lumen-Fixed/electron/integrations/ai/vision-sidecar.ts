@@ -1,3 +1,5 @@
+import type { ModelInfo } from '../../../shared/ai'
+
 export interface VisionSidecarFrame {
   timestamp: string
   description: string
@@ -8,6 +10,16 @@ export interface VisionSidecarObservation {
   summary: string
   frames: VisionSidecarFrame[]
   uncertainty?: string[]
+}
+
+export function selectVisionSidecar(models: ModelInfo[], preferredId?: string) {
+  const vision = models.filter((model) => model.vision === true)
+  if (!vision.length) return undefined
+  if (preferredId) {
+    const preferred = vision.find((model) => model.id === preferredId)
+    if (preferred) return preferred
+  }
+  return [...vision].sort((a, b) => (b.context ?? 0) - (a.context ?? 0))[0]
 }
 
 export function buildVisionSidecarPrompt(toolText: string, pictureCount: number) {
