@@ -22,6 +22,10 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - name: Use default Electron icons when the upstream build resources are absent
+        shell: pwsh
+        run: |
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json','utf8')); if (!fs.existsSync('build/icon.ico')) { delete p.build.win.icon; delete p.build.nsis.installerIcon; delete p.build.nsis.uninstallerIcon; delete p.build.nsis.installerHeaderIcon; for (const a of p.build.fileAssociations || []) delete a.icon; fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n'); }"
       - run: npm run dist
       - uses: actions/upload-artifact@v4
         with:
