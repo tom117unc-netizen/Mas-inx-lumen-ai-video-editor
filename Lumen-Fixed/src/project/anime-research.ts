@@ -1,4 +1,5 @@
 import type { Project } from '@/editor/types'
+import { desktop, integrations as desktopIntegrations } from '@/lib/platform'
 import type { ContextBankAPI } from '@shared/context-bank'
 import {
   CONTEXT_BANK_RESEARCH_CHUNK_TEXT_MAX,
@@ -184,20 +185,27 @@ function resolverError(result: Extract<AnimeCatalogResolveResult, { status: 'err
 export async function seedAnimeResearchForProject(
   project: Project,
   projectPath: string | null,
-  dependencies: AnimeResearchDependencies,
+  dependencies?: AnimeResearchDependencies,
 ): Promise<AnimeResearchSeedResult> {
   const setup = project.animeReview
   if (!projectPath || !setup?.showQuery) return { status: 'skipped' }
 
-  const { bank, integrations } = dependencies
-  const now = dependencies.now ?? Date.now
+  const resolvedDependencies = dependencies ?? (
+    desktop?.contextBank && desktopIntegrations
+      ? { bank: desktop.contextBank, integrations: desktopIntegrations }
+      : undefined
+  )
+  if (!resolvedDependencies) return { status: 'skipped' }
+
+  const { bank, integrations } = resolvedDependencies
+  const now = resolvedDependencies.now ?? Date.now
   const location = { projectPath, projectId: project.id }
   const existing = await bank.getResearchStatus(location)
 
   if (existing.state?.status === 'ready') {
     return { status: 'ready', reused: true, identity: existing.state.identity }
   }
-  if (existing.state?.status === 'error' && !dependencies.allowRetry) {
+  if (existing.state?.status === 'error' && !resolvedDependencies.allowRetry) {
     return { status: 'error', error: existing.state.error ?? 'Anime research previously failed', retryable: true }
   }
 
