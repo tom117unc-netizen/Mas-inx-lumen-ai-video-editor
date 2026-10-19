@@ -12,6 +12,7 @@ import { CONTEXT_BANK_ANALYSIS_TOOLS } from './context-bank-analysis'
 import { makeContextBankQuery } from './context-bank-query'
 import { CONTEXT_BANK_RESEARCH_TOOLS } from './context-bank-research'
 import { SOURCE_SCENE_SEARCH_TOOL } from './source-scene-search'
+import { ANIME_ROUGH_CUT_TOOL } from './anime-rough-cut'
 import { list, obj, str, num, int, oneOf, type AgentTool } from './kit'
 
 const MAX_PNGTUBER_PREVIEW_INTERVALS = 1_200
@@ -222,5 +223,6 @@ export const ANIME_REVIEW_TOOLS: AgentTool[] = [
   ...CONTEXT_BANK_ANALYSIS_TOOLS,
   ...CONTEXT_BANK_RESEARCH_TOOLS,
   SOURCE_SCENE_SEARCH_TOOL,
+  ANIME_ROUGH_CUT_TOOL,
   ...PNGTUBER_TOOLS,
 ]
