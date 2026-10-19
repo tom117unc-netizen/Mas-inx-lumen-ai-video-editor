@@ -12,6 +12,7 @@ import { getProject, migrateProject, useEditor } from '@/editor/store'
 import type { Project, ProjectSettings } from '@/editor/types'
 import { useUI } from '@/editor/ui-store'
 import { desktop } from '@/lib/platform'
+import { seedAnimeResearchForProject } from './anime-research'
 
 interface SessionState {
   /** The .lumen file this project was opened from / saved to (null = never saved). */
@@ -140,6 +141,8 @@ export async function saveProjectAs(): Promise<boolean> {
     const res = await desktop.project.saveAs(getProject().name, serialize(getProject()))
     if (!res) return false
     markSaved(res.path)
+    const project = getProject()
+    if (project.animeReview) void seedAnimeResearchForProject(project, res.path).catch(() => {})
     void refreshRecent()
     toast.success('Project saved', { description: res.path })
     return true
