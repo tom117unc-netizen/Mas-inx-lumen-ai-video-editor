@@ -36,6 +36,7 @@ const TRANSIENT_RETRY_DELAYS_MS = [250, 750] as const
 const SNIPPET_FALLBACK_NOTICE = 'Search-result snippet only; full page could not be read. Treat as lower-confidence locator evidence.'
 
 type ResearchSleep = (milliseconds: number) => Promise<void>
+type BuiltResearchSource = { source: ContextBankResearchSource; chunks: ContextBankResearchChunk[] }
 
 function researchIdentity(candidate: AnimeCatalogCandidate): ContextBankResearchIdentity {
   return {
@@ -209,7 +210,7 @@ async function collectUniqueSearchResults(integrations: IntegrationsAPI, queries
   return [...found.values()]
 }
 
-async function sourceAndChunks(page: WebPage, retrievedAt: number): Promise<{ source: ContextBankResearchSource; chunks: ContextBankResearchChunk[] } | null> {
+async function sourceAndChunks(page: WebPage, retrievedAt: number): Promise<BuiltResearchSource | null> {
   const url = normalizedUrl(page.url)
   const text = String(page.text ?? '').slice(0, SOURCE_TEXT_LIMIT).trim()
   if (!url || !text) return null
@@ -234,7 +235,7 @@ async function sourceAndChunks(page: WebPage, retrievedAt: number): Promise<{ so
   return { source, chunks }
 }
 
-async function sourceAndChunksFromSearchResult(result: WebSearchResult, retrievedAt: number): Promise<{ source: ContextBankResearchSource; chunks: ContextBankResearchChunk[] } | null> {
+async function sourceAndChunksFromSearchResult(result: WebSearchResult, retrievedAt: number): Promise<BuiltResearchSource | null> {
   const url = normalizedUrl(result.url)
   const snippet = String(result.snippet ?? '').trim()
   if (!url || !snippet) return null
@@ -271,6 +272,31 @@ async function sourceAndChunksFromSearchResult(result: WebSearchResult, retrieve
     chunks.push({ id, ...chunk })
   }
   return chunks.length ? { source, chunks } : null
+}
+
+function boundedChunksAcrossSources(builds: readonly BuiltResearchSource[]) {
+  if (!builds.length) return [] as ContextBankResearchChunk[]
+
+  const chunks: ContextBankResearchChunk[] = []
+  const consumed = new Array<number>(builds.length).fill(0)
+  const reservePerSource = Math.max(1, Math.floor(CHUNK_LIMIT / builds.length))
+
+  // Give every accepted source a fair first share so a giant overview page
+  // cannot consume the entire bank before episode-guide evidence is represented.
+  for (let index = 0; index < builds.length && chunks.length < CHUNK_LIMIT; index++) {
+    const take = Math.min(reservePerSource, builds[index]!.chunks.length, CHUNK_LIMIT - chunks.length)
+    chunks.push(...builds[index]!.chunks.slice(0, take))
+    consumed[index] = take
+  }
+
+  // Fill unused capacity from remaining chunks in deterministic source order.
+  for (let index = 0; index < builds.length && chunks.length < CHUNK_LIMIT; index++) {
+    const remaining = builds[index]!.chunks.slice(consumed[index])
+    const take = Math.min(remaining.length, CHUNK_LIMIT - chunks.length)
+    chunks.push(...remaining.slice(0, take))
+  }
+
+  return chunks
 }
 
 function state(showQuery: string, status: ContextBankResearchState['status'], updatedAt: number, patch: Partial<ContextBankResearchState> = {}): ContextBankResearchState {
@@ -339,8 +365,7 @@ export async function seedAnimeResearchForProject(
 
   try {
     const results = await collectUniqueSearchResults(integrations, identityQueries(identity), sleep)
-    const sources: ContextBankResearchSource[] = []
-    const chunks: ContextBankResearchChunk[] = []
+    let builds: BuiltResearchSource[] = []
 
     for (const result of results.slice(0, PAGE_LIMIT)) {
       let page: WebPage
@@ -351,29 +376,23 @@ export async function seedAnimeResearchForProject(
       }
       const built = await sourceAndChunks(page, now())
       if (!built) continue
-      sources.push(built.source)
-      for (const chunk of built.chunks) {
-        if (chunks.length >= CHUNK_LIMIT) break
-        chunks.push(chunk)
-      }
-      if (sources.length >= PAGE_LIMIT || chunks.length >= CHUNK_LIMIT) break
+      builds.push(built)
+      if (builds.length >= PAGE_LIMIT) break
     }
 
-    if (!sources.length) {
+    if (!builds.length) {
       for (const result of results.slice(0, PAGE_LIMIT)) {
         const built = await sourceAndChunksFromSearchResult(result, now())
         if (!built) continue
-        sources.push(built.source)
-        for (const chunk of built.chunks) {
-          if (chunks.length >= CHUNK_LIMIT) break
-          chunks.push(chunk)
-        }
-        if (sources.length >= PAGE_LIMIT || chunks.length >= CHUNK_LIMIT) break
+        builds.push(built)
+        if (builds.length >= PAGE_LIMIT) break
       }
     }
 
-    if (!sources.length) throw new Error('No usable research pages or search-result snippets were found')
+    if (!builds.length) throw new Error('No usable research pages or search-result snippets were found')
 
+    const sources = builds.map(built => built.source)
+    const chunks = boundedChunksAcrossSources(builds)
     const ready = state(setup.showQuery, 'ready', now(), { identity })
     await bank.replaceResearchSeed({ ...location, state: ready, sources, chunks })
     return { status: 'ready', identity }
