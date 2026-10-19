@@ -83,6 +83,16 @@ export function sanitizeAnimeReviewSetup(value: unknown): AnimeReviewSetup | und
 }
 
 /**
+ * Converts the optional Home-screen show title into project creation arguments.
+ * Blank or invalid input deliberately stays on Lumen's ordinary unsaved-project
+ * path; a valid title becomes only the small portable review intent.
+ */
+export function animeReviewProjectFromTitle(showTitle: string): { name: string; animeReview?: AnimeReviewSetup } {
+  const animeReview = sanitizeAnimeReviewSetup({ version: 1, showQuery: showTitle })
+  return animeReview ? { name: animeReview.showQuery, animeReview } : { name: 'Untitled' }
+}
+
+/**
  * Normalizes the optional review setup whenever a project enters the editor.
  * The project itself remains authoritative; this merely prevents malformed or
  * stale research-shaped payloads from travelling in the canonical document.
