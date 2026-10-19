@@ -15,7 +15,7 @@ function source(name: string, mime: string) {
 describe('anime review workflow regression', () => {
   it('keeps research subordinate to verified episode evidence and mouth edits approval-safe', () => {
     const project = createEmptyProject('workflow', { fps: 30 })
-    project.animeReview = { showQuery: 'Recently, My Sister Is Unusual' }
+    project.animeReview = { version: 1, showQuery: 'Recently, My Sister Is Unusual' }
     project.assets.ep2 = { id: 'ep2', name: 'Show S01E02.mp4', kind: 'video', source: source('Show S01E02.mp4', 'video/mp4'), addedAt: 1, duration: 1440 }
     project.assets.ep5 = { id: 'ep5', name: 'Show S01E05.mp4', kind: 'video', source: source('Show S01E05.mp4', 'video/mp4'), addedAt: 1, duration: 1440 }
     project.assets.closed = { id: 'closed', name: 'avatar_closed_B.png', kind: 'image', source: source('avatar_closed_B.png', 'image/png'), addedAt: 1 }
