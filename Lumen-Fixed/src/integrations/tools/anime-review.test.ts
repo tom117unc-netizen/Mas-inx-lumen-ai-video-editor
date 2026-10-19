@@ -13,6 +13,8 @@ const EXPECTED_TOOLS = [
   'search_show_research',
   'record_research_prior',
   'plan_source_scene_search',
+  'plan_pngtuber_mouth_sync',
+  'plan_pngtuber_sprite_replacement',
 ]
 
 describe('ANIME_REVIEW_TOOLS', () => {
