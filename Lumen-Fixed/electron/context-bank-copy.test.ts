@@ -110,4 +110,48 @@ describe('Context Bank Save As copy', () => {
       source.close()
     }
   })
+
+  it('keeps verified source observations in the copied bank', () => {
+    const base = root()
+    const sourceProject = path.join(base, 'old', 'review.lumen')
+    const targetProject = path.join(base, 'new', 'review-copy.lumen')
+    fs.mkdirSync(path.dirname(sourceProject), { recursive: true })
+    const media = path.join(path.dirname(sourceProject), 'episode01.mkv')
+    fs.writeFileSync(media, Buffer.from('episode-source'))
+    const source = openContextBank(sourceProject, 'project-1')
+    try {
+      source.sync({ projectPath: sourceProject, mirror: mirror('project-1', 5, media) })
+      source.putObservations({
+        projectPath: sourceProject,
+        projectId: 'project-1',
+        assetId: 'asset-1',
+        observations: [{
+          id: 'scene-1',
+          kind: 'scene',
+          start: 12,
+          end: 18,
+          text: 'Character enters the room.',
+          confidence: 0.95,
+          provenance: { producer: 'media-analyzer', model: 'vision-v1', source: 'verified-media', createdAt: 200 },
+          analysisVersion: 'scene-v1',
+        }],
+      })
+      copyContextBankForSaveAs('project-1', sourceProject, targetProject)
+      const target = openContextBank(targetProject, 'project-1')
+      try {
+        const result = target.getObservations({
+          projectPath: targetProject,
+          projectId: 'project-1',
+          assetId: 'asset-1',
+          maxItems: 20,
+          maxCharacters: 10_000,
+        })
+        expect(result.observations).toEqual([expect.objectContaining({ id: 'scene-1', start: 12, end: 18 })])
+      } finally {
+        target.close()
+      }
+    } finally {
+      source.close()
+    }
+  })
 })
