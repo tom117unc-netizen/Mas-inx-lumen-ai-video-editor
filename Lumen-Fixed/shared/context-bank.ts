@@ -6,6 +6,16 @@ import type {
   ContextBankTranscriptResult,
   ContextBankTranscriptWriteRequest,
 } from './context-bank-analysis'
+import type {
+  ContextBankResearchPriorWriteRequest,
+  ContextBankResearchPriorWriteResult,
+  ContextBankResearchSearchRequest,
+  ContextBankResearchSearchResult,
+  ContextBankResearchSeedWriteRequest,
+  ContextBankResearchStateWriteRequest,
+  ContextBankResearchStatusRequest,
+  ContextBankResearchStatusResult,
+} from './context-bank-research'
 
 export const CONTEXT_BANK_MIRROR_FORMAT = 'lumen-context-mirror' as const
 export const CONTEXT_BANK_MIRROR_VERSION = 1 as const
@@ -179,6 +189,11 @@ export interface ContextBankAPI {
   getTranscript(query: ContextBankTranscriptQuery): Promise<ContextBankTranscriptResult>
   putObservations(request: ContextBankObservationWriteRequest): Promise<ContextBankObservationResult>
   getObservations(query: ContextBankObservationQuery): Promise<ContextBankObservationResult>
+  getResearchStatus(request: ContextBankResearchStatusRequest): Promise<ContextBankResearchStatusResult>
+  setResearchState(request: ContextBankResearchStateWriteRequest): Promise<ContextBankResearchStatusResult>
+  replaceResearchSeed(request: ContextBankResearchSeedWriteRequest): Promise<ContextBankResearchStatusResult>
+  searchResearch(request: ContextBankResearchSearchRequest): Promise<ContextBankResearchSearchResult>
+  putResearchPrior(request: ContextBankResearchPriorWriteRequest): Promise<ContextBankResearchPriorWriteResult>
   status(projectPath: string, projectId: string): Promise<ContextBankStatus>
   copyForSaveAs(projectId: string, fromProjectPath: string, toProjectPath: string): Promise<void>
   clear(projectPath: string, projectId: string): Promise<void>
