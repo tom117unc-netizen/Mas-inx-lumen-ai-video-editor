@@ -147,11 +147,12 @@ function splitPageIntoChunks(sourceId: string, text: string): Omit<ContextBankRe
       const piece = remaining.slice(0, CONTEXT_BANK_RESEARCH_CHUNK_TEXT_MAX).trim()
       if (!piece) break
       const firstLine = piece.split(/\r?\n/, 1)[0]?.trim()
+      const firstLineEpisodeNumber = firstLine ? explicitEpisodeNumber(firstLine) : undefined
       const episodeNumber = explicitEpisodeNumber(piece)
       chunks.push({
         sourceId,
         ordinal: ordinal++,
-        ...(firstLine && explicitEpisodeNumber(firstLine) !== undefined ? { heading: firstLine } : {}),
+        ...(firstLineEpisodeNumber === undefined ? {} : { heading: `Episode ${firstLineEpisodeNumber}` }),
         text: piece,
         ...(episodeNumber === undefined ? {} : { episodeNumber }),
       })
