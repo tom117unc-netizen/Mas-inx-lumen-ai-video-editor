@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ANIME_REVIEW_TOOLS } from './anime-review'
 
-const EXPECTED_TOOLS = ['inspect_all_timelines', 'list_timeline_markers', 'edit_timeline_marker']
+const EXPECTED_TOOLS = ['inspect_all_timelines', 'list_timeline_markers', 'edit_timeline_marker', 'query_context_bank']
 
 describe('ANIME_REVIEW_TOOLS', () => {
   it('contains no sparse or undefined tool entries', () => {
