@@ -45,13 +45,13 @@ describe('anime review project setup', () => {
 
   it('migrates old projects without inventing anime review state', () => {
     const old = createEmptyProject('Old') as Project
-    delete (old as Project & { animeReview?: unknown }).animeReview
+    delete (old as unknown as { animeReview?: unknown }).animeReview
     expect(migrateProject(old).animeReview).toBeUndefined()
   })
 
   it('sanitizes malformed anime review state at the project load boundary', () => {
-    const project = createEmptyProject('Review') as Project & { animeReview?: unknown }
-    project.animeReview = { version: 99, showQuery: '   ' }
-    expect(normalizeAnimeReviewProject(project as Project).animeReview).toBeUndefined()
+    const project = createEmptyProject('Review')
+    ;(project as unknown as { animeReview?: unknown }).animeReview = { version: 99, showQuery: '   ' }
+    expect(normalizeAnimeReviewProject(project).animeReview).toBeUndefined()
   })
 })
