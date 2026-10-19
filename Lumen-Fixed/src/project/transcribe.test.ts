@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Job } from '@shared/integrations'
 import type { ContextBankTranscriptWriteRequest } from '@shared/context-bank-analysis'
+import type { ElevenLabsScribeJobDetail } from '@shared/scribe'
 
 const mocks = vi.hoisted(() => ({
   project: {
@@ -20,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   subscribe: vi.fn(() => () => {}),
   putTranscript: vi.fn(),
   flush: vi.fn(async () => {}),
-  doneJob: null as Job | null,
+  doneJob: null as (Job & ElevenLabsScribeJobDetail) | null,
 }))
 
 vi.mock('@/editor/store', () => ({
@@ -110,7 +111,7 @@ describe('transcribeMedia reusable Scribe analysis', () => {
         language: 'en',
         analysisVersion: 'scribe_v2-word-v1',
       },
-    } as Job
+    }
   })
 
   it('returns the existing phrase transcript and persists detailed Scribe words exactly once', async () => {
