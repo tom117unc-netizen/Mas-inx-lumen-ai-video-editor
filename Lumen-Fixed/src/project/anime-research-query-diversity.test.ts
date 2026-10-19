@@ -52,6 +52,13 @@ const resolved = {
   candidates: [],
 }
 
+function api(search: IntegrationsAPI['web']['search'], read: IntegrationsAPI['web']['read']) {
+  return {
+    animeCatalog: { resolve: vi.fn(async () => resolved) },
+    web: { search, read },
+  } as unknown as IntegrationsAPI
+}
+
 describe('anime research query diversity', () => {
   it('reserves source capacity for later episode-focused queries instead of letting the first broad query consume every slot', async () => {
     const contextBank = bank()
@@ -82,14 +89,10 @@ describe('anime research query diversity', () => {
       links: [],
       images: [],
     }))
-    const integrations = {
-      animeCatalog: { resolve: vi.fn(async () => resolved) },
-      web: { search, read },
-    } as unknown as IntegrationsAPI
 
     const result = await seedAnimeResearchForProject(project(), projectPath, {
       bank: contextBank,
-      integrations,
+      integrations: api(search as IntegrationsAPI['web']['search'], read as IntegrationsAPI['web']['read']),
       now: () => 10,
     })
 
@@ -99,5 +102,41 @@ describe('anime research query diversity', () => {
     expect(request?.sources.some(source => source.url === 'https://episodes.example/guide')).toBe(true)
     expect(request?.chunks.some(chunk => chunk.episodeNumber === 2)).toBe(true)
     expect(request?.sources.length).toBeLessThanOrEqual(8)
+  })
+
+  it('reserves chunk capacity for episode locators when an earlier overview page can fill the entire chunk budget', async () => {
+    const contextBank = bank()
+    const search = vi.fn(async (query: string) => {
+      if (query.includes('overview characters')) {
+        return [{ title: 'Huge overview', url: 'https://generic.example/huge', snippet: 'Huge overview' }]
+      }
+      if (query.includes('episode guide')) {
+        return [{ title: 'Episode guide', url: 'https://episodes.example/guide', snippet: 'Episode 2 clue' }]
+      }
+      return []
+    })
+    const hugeOverview = Array.from({ length: 256 }, (_, index) => `Character note ${index} with general background.`).join('\n\n')
+    const read = vi.fn(async (url: string) => ({
+      url,
+      title: url.includes('episodes.example') ? 'Episode guide' : 'Huge overview',
+      site: new URL(url).hostname,
+      text: url.includes('episodes.example')
+        ? 'Episode 2\nThe party reaches the village and learns an important clue.'
+        : hugeOverview,
+      links: [],
+      images: [],
+    }))
+
+    const result = await seedAnimeResearchForProject(project(), projectPath, {
+      bank: contextBank,
+      integrations: api(search as IntegrationsAPI['web']['search'], read as IntegrationsAPI['web']['read']),
+      now: () => 11,
+    })
+
+    expect(result).toMatchObject({ status: 'ready' })
+    const request = vi.mocked(contextBank.replaceResearchSeed).mock.calls[0]?.[0]
+    expect(request?.sources.some(source => source.url === 'https://episodes.example/guide')).toBe(true)
+    expect(request?.chunks.some(chunk => chunk.episodeNumber === 2)).toBe(true)
+    expect(request?.chunks.length).toBeLessThanOrEqual(256)
   })
 })
