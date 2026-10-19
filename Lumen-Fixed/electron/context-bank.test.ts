@@ -91,6 +91,62 @@ function seedSchemaV1(projectPath: string, projectId: string) {
   }
 }
 
+function seedSchemaV2(projectPath: string, projectId: string) {
+  seedSchemaV1(projectPath, projectId)
+  const file = contextBankPath(projectPath, projectId)
+  const db = new DatabaseSync(file)
+  try {
+    db.exec(`
+      CREATE TABLE source_transcripts (
+        transcript_id TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        language TEXT,
+        analysis_version TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        payload BLOB NOT NULL
+      );
+      CREATE INDEX idx_context_transcripts_fingerprint ON source_transcripts(fingerprint);
+      CREATE INDEX idx_context_transcripts_created ON source_transcripts(created_at DESC);
+      CREATE TABLE source_observations (
+        fingerprint TEXT NOT NULL,
+        observation_id TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        start_seconds REAL NOT NULL,
+        end_seconds REAL NOT NULL,
+        text TEXT NOT NULL,
+        confidence REAL,
+        producer TEXT NOT NULL,
+        model TEXT,
+        source TEXT,
+        created_at INTEGER NOT NULL,
+        analysis_version TEXT NOT NULL,
+        metadata_json TEXT,
+        PRIMARY KEY (fingerprint, observation_id)
+      );
+      CREATE INDEX idx_context_observations_range ON source_observations(fingerprint, start_seconds, end_seconds);
+      CREATE INDEX idx_context_observations_kind ON source_observations(fingerprint, kind);
+    `)
+    db.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run()
+    db.prepare(`INSERT INTO source_transcripts(
+      transcript_id,fingerprint,asset_id,provider,model,language,analysis_version,created_at,payload
+    ) VALUES (?,?,?,?,?,?,?,?,?)`).run(
+      'transcript-old', 'old-fingerprint', 'asset-old', 'elevenlabs', 'scribe_v2', 'en', 'word-v1', 100, Buffer.from('old-payload'),
+    )
+    db.prepare(`INSERT INTO source_observations(
+      fingerprint,observation_id,asset_id,kind,start_seconds,end_seconds,text,confidence,producer,model,source,created_at,analysis_version,metadata_json
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      'old-fingerprint', 'observation-old', 'asset-old', 'scene', 1, 2, 'Old verified scene', 0.9,
+      'media-analyzer', 'vision-v1', 'verified-media', 101, 'scene-v1', null,
+    )
+  } finally {
+    db.close()
+  }
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
@@ -106,31 +162,53 @@ describe('context bank storage', () => {
     expect(() => contextBankPath(projectPath, '../escape')).toThrow(/project id/i)
   })
 
-  it('opens idempotently with schema version 2', () => {
+  it('opens idempotently with schema version 3', () => {
     const projectPath = projectFile()
     const first = openContextBank(projectPath, 'project-1')
     const second = openContextBank(projectPath, 'project-1')
     try {
-      expect(first.status()).toMatchObject({ available: true, schemaVersion: 2, projectId: 'project-1', revision: 0 })
-      expect(second.status()).toMatchObject({ available: true, schemaVersion: 2, projectId: 'project-1', revision: 0 })
+      expect(first.status()).toMatchObject({ available: true, schemaVersion: 3, projectId: 'project-1', revision: 0 })
+      expect(second.status()).toMatchObject({ available: true, schemaVersion: 3, projectId: 'project-1', revision: 0 })
     } finally {
       second.close()
       first.close()
     }
   })
 
-  it('migrates a schema v1 database without losing mirrored state or edit history', () => {
+  it('migrates a schema v1 database to v3 without losing mirrored state or edit history', () => {
     const projectPath = projectFile()
     seedSchemaV1(projectPath, 'project-1')
     const store = openContextBank(projectPath, 'project-1')
     try {
-      expect(store.status()).toMatchObject({ schemaVersion: 2, revision: 5, assetCount: 1, clipCount: 1, markerCount: 1, editEventCount: 1 })
+      expect(store.status()).toMatchObject({ schemaVersion: 3, revision: 5, assetCount: 1, clipCount: 1, markerCount: 1, editEventCount: 1 })
       const result = store.query({ projectPath, projectId: 'project-1', sequenceId: 'main', purpose: 'migration test', maxItems: 20, maxCharacters: 20_000 })
       expect(result.clips).toEqual([expect.objectContaining({ clipId: 'clip-old', assetId: 'asset-old' })])
       expect(result.markers).toEqual([expect.objectContaining({ markerId: 'marker-old', label: 'Old marker' })])
       expect(result.edits).toEqual([expect.objectContaining({ operationId: 'dispatch:history:9', label: 'Old edit' })])
     } finally {
       store.close()
+    }
+  })
+
+  it('migrates schema v2 to v3 without losing reusable transcripts or verified observations', () => {
+    const projectPath = projectFile()
+    seedSchemaV2(projectPath, 'project-1')
+    const file = contextBankPath(projectPath, 'project-1')
+    const store = openContextBank(projectPath, 'project-1')
+    try {
+      expect(store.status()).toMatchObject({ schemaVersion: 3, revision: 5, assetCount: 1, clipCount: 1, markerCount: 1, editEventCount: 1 })
+      expect(store.getResearchStatus({ projectPath, projectId: 'project-1' })).toMatchObject({ sourceCount: 0, chunkCount: 0, priorCount: 0 })
+    } finally {
+      store.close()
+    }
+
+    const db = new DatabaseSync(file)
+    try {
+      expect(Number((db.prepare('SELECT COUNT(*) AS count FROM source_transcripts').get() as { count: number | bigint }).count)).toBe(1)
+      expect(Number((db.prepare('SELECT COUNT(*) AS count FROM source_observations').get() as { count: number | bigint }).count)).toBe(1)
+      expect(Number((db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name IN ('show_research_state','research_sources','research_chunks','research_priors','research_chunks_fts')").get() as { count: number | bigint }).count)).toBe(5)
+    } finally {
+      db.close()
     }
   })
 
