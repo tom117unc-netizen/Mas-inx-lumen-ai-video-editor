@@ -5,6 +5,7 @@
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import type { ProjectVersion, RecentProject, RecoveryInfo } from '@shared/app'
+import { normalizeAnimeReviewProject, type AnimeReviewSetup } from '@/editor/anime-review-project'
 import { createEmptyProject } from '@/editor/new-project'
 import { playback } from '@/editor/playback'
 import { getProject, migrateProject, useEditor } from '@/editor/store'
@@ -58,7 +59,7 @@ function markSaved(path: string | null) {
 function load(project: Project, path: string | null) {
   playback.pause()
   useUI.getState().clearSelection()
-  useEditor.getState().loadProject(migrateProject(project))
+  useEditor.getState().loadProject(migrateProject(normalizeAnimeReviewProject(project)))
   playback.seek(0)
   useSession.setState({ path, savedVersion: useEditor.getState().version, home: false, hasProject: true })
   syncWindow()
@@ -74,10 +75,21 @@ async function settleChanges(): Promise<boolean> {
   return true
 }
 
-export async function newProject(settings: Partial<ProjectSettings>, name = 'Untitled') {
+/**
+ * Creates a project in memory. Anime-review projects immediately ask for a
+ * durable .lumen location so later research/cache work has a project-local
+ * home. Cancelling that dialog leaves the new project open and unsaved; it does
+ * not create a fallback Context Bank elsewhere.
+ */
+export async function newProject(
+  settings: Partial<ProjectSettings>,
+  name = 'Untitled',
+  animeReview?: AnimeReviewSetup,
+) {
   if (!(await settleChanges())) return false
-  load(createEmptyProject(name, settings), null)
+  load(createEmptyProject(name, settings, animeReview), null)
   void desktop?.project.autosave(null)
+  if (animeReview && desktop) await saveProjectAs()
   return true
 }
 
