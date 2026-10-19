@@ -51,7 +51,7 @@ describe('anime PNGTuber mouth planner', () => {
     project.tracks.push(track)
     project.assets.mouth = { id: 'mouth', name: 'mouth.png', kind: 'image', source: { type: 'file', url: 'file:///mouth.png', mime: 'image/png', fileName: 'mouth.png', size: 1 }, addedAt: 1 }
     const clip = createClip({ id: 'mouth-1', kind: 'image', assetId: 'mouth', trackId: track.id, start: 10, duration: 5 })
-    const patch = { format: 'lumen-ai-patch' as const, version: 1 as const, projectId: project.id, edits: [{ op: 'addClip' as const, sequenceId: 'main', clip }] }
+    const patch = { format: 'lumen-ai-patch' as const, version: 1 as const, projectId: project.id, edits: [{ op: 'addClip' as const, sequenceId: 'main', clipId: clip.id, clip }] }
     const result = applyAiPatch(project, patch)
     expect(project.clips['mouth-1']).toBeUndefined()
     expect(result.project.clips['mouth-1']).toEqual(clip)
@@ -61,7 +61,7 @@ describe('anime PNGTuber mouth planner', () => {
     const audio = structuredClone(project); audio.tracks.find(t => t.id === track.id)!.kind = 'audio'
     expect(() => applyAiPatch(audio, patch)).toThrow(/video/i)
     const unknownAsset = structuredClone(clip); unknownAsset.id = 'mouth-2'; unknownAsset.assetId = 'missing'
-    expect(() => applyAiPatch(project, { ...patch, edits: [{ op: 'addClip' as const, sequenceId: 'main', clip: unknownAsset }] })).toThrow(/asset/i)
+    expect(() => applyAiPatch(project, { ...patch, edits: [{ op: 'addClip' as const, sequenceId: 'main', clipId: unknownAsset.id, clip: unknownAsset }] })).toThrow(/asset/i)
   })
   it('rejects invalid sync thresholds', () => {
     expect(() => planMouthSync({ peaks: [], peaksPerSecond: 10 }, { timelineStartFrame: 0, durationFrames: 1, sourceInSeconds: 0 }, { fps: 30, openThreshold: 0.1, closeThreshold: 0.2 })).toThrow()
