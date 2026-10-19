@@ -24,7 +24,7 @@ const media = (patch: Record<string, unknown> = {}) => ({
 
 describe('AniList anime catalog adapter', () => {
   it('uses one bounded unauthenticated POST request to the official GraphQL endpoint', async () => {
-    const fetcher = vi.fn(async () => response({ data: { Page: { media: [media()] } } }))
+    const fetcher = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1]) => response({ data: { Page: { media: [media()] } } }))
     const result = await resolveAnimeCatalog('Frieren: Beyond Journey’s End', fetcher)
 
     expect(result.status).toBe('resolved')
