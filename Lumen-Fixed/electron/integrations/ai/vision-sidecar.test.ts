@@ -1,25 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { buildVisionSidecarPrompt, formatVisionObservation } from './vision-sidecar'
+import { sidecarToolText } from './vision-sidecar'
 
-describe('vision sidecar', () => {
-  it('asks for edit-grade visual evidence instead of a generic caption', () => {
-    const prompt = buildVisionSidecarPrompt({ pictureCount: 12, toolText: 'Contact sheet 00:00–01:00, 5 second intervals.' })
-    expect(prompt).toContain('timestamp')
-    expect(prompt).toContain('shot')
-    expect(prompt).toContain('composition')
-    expect(prompt).toContain('readable text')
-    expect(prompt).toContain('occlusion')
-    expect(prompt).toContain('crop')
-    expect(prompt).toContain('blur')
-    expect(prompt).toContain('uncertainty')
-    expect(prompt).toContain('editing')
-    expect(prompt).toContain('12')
-  })
+describe('sidecarToolText', () => {
+  it('replaces unavailable pictures with detailed timestamp-preserving visual evidence', () => {
+    const text = sidecarToolText('Contact sheet 00:00–01:00; cells every 5s.', {
+      summary: 'Bedroom conversation with a cut to a title card.',
+      frames: [
+        { timestamp: '00:15', description: 'Medium shot of Mitsuki, screen-left.', editUse: 'Clean reaction cut; crop right side safely.' },
+        { timestamp: '00:45', description: 'Chapter card with YUYA text.', editUse: 'Use as chapter transition.' },
+      ],
+      uncertainty: ['00:15 subtitle wording is too small to read confidently.'],
+    })
 
-  it('labels sidecar output as visual evidence and preserves the original tool metadata', () => {
-    const text = formatVisionObservation('Contact sheet metadata', '00:05: medium shot; subject frame-left; subtitle bottom-centre.')
-    expect(text).toContain('Contact sheet metadata')
-    expect(text).toContain('VISION SIDECAR OBSERVATION')
-    expect(text).toContain('00:05')
+    expect(text).toContain('VISUAL EVIDENCE FROM VISION SIDECAR')
+    expect(text).toContain('00:15')
+    expect(text).toContain('Medium shot of Mitsuki')
+    expect(text).toContain('crop right side safely')
+    expect(text).toContain('00:45')
+    expect(text).toContain('UNCERTAINTY')
+    expect(text).not.toContain('picture not shown')
   })
 })
