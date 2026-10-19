@@ -6,7 +6,6 @@ import type {
   ContextBankResearchStatusRequest,
 } from '@shared/context-bank-research'
 import {
-  CONTEXT_BANK_RESEARCH_CHUNK_TEXT_MAX,
   CONTEXT_BANK_RESEARCH_EPISODE_MAX,
   CONTEXT_BANK_RESEARCH_EVIDENCE_EXCERPT_MAX,
   CONTEXT_BANK_RESEARCH_ID_MAX,
