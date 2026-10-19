@@ -79,6 +79,9 @@ const integrations: IntegrationsAPI = {
     import: () => invoke(IPC.skillsImport),
     openFolder: () => invoke(IPC.skillsOpenFolder),
   },
+  animeCatalog: {
+    resolve: (query) => invoke(IPC.animeCatalogResolve, query),
+  },
   web: {
     search: (query, max) => invoke(IPC.webSearch, query, max),
     read: (url, maxChars) => invoke(IPC.webRead, url, maxChars),
