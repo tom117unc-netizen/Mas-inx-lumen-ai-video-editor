@@ -32,6 +32,9 @@ const SEARCH_LIMIT = 4
 const PAGE_LIMIT = CONTEXT_BANK_RESEARCH_SEED_SOURCES_MAX
 const SOURCE_TEXT_LIMIT = CONTEXT_BANK_RESEARCH_SOURCE_TEXT_MAX
 const CHUNK_LIMIT = CONTEXT_BANK_RESEARCH_SEED_CHUNKS_MAX
+const TRANSIENT_RETRY_DELAYS_MS = [250, 750] as const
+
+type ResearchSleep = (milliseconds: number) => Promise<void>
 
 function researchIdentity(candidate: AnimeCatalogCandidate): ContextBankResearchIdentity {
   return {
@@ -86,6 +89,33 @@ function normalizedUrl(value: string) {
   }
 }
 
+function researchErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isTransientResearchError(error: unknown) {
+  const message = researchErrorMessage(error).toLowerCase()
+  return /\b(?:429|502|503|504)\b/.test(message)
+    || /timed?\s*out|timeout|temporar(?:y|ily)|network|fetch failed|econnreset|econnrefused|enetunreach|eai_again/.test(message)
+}
+
+async function sleep(milliseconds: number) {
+  await new Promise<void>(resolve => setTimeout(resolve, milliseconds))
+}
+
+async function withTransientRetry<T>(operation: () => Promise<T>, wait: ResearchSleep): Promise<T> {
+  let retryIndex = 0
+  while (true) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!isTransientResearchError(error) || retryIndex >= TRANSIENT_RETRY_DELAYS_MS.length) throw error
+      await wait(TRANSIENT_RETRY_DELAYS_MS[retryIndex]!)
+      retryIndex += 1
+    }
+  }
+}
+
 async function sha256(value: string) {
   const bytes = new TextEncoder().encode(value)
   const digest = await crypto.subtle.digest('SHA-256', bytes)
@@ -130,10 +160,15 @@ function splitPageIntoChunks(sourceId: string, text: string): Omit<ContextBankRe
   return chunks
 }
 
-async function collectUniqueSearchResults(integrations: IntegrationsAPI, queries: readonly string[]) {
+async function collectUniqueSearchResults(integrations: IntegrationsAPI, queries: readonly string[], wait: ResearchSleep) {
   const found = new Map<string, WebSearchResult>()
   for (const query of queries.slice(0, SEARCH_LIMIT)) {
-    const results = await integrations.web.search(query, 8)
+    let results: WebSearchResult[]
+    try {
+      results = await withTransientRetry(() => integrations.web.search(query, 8), wait)
+    } catch {
+      continue
+    }
     for (const result of results) {
       const url = normalizedUrl(result.url)
       if (!url || found.has(url)) continue
@@ -234,12 +269,17 @@ export async function seedAnimeResearchForProject(
   })
 
   try {
-    const results = await collectUniqueSearchResults(integrations, identityQueries(identity))
+    const results = await collectUniqueSearchResults(integrations, identityQueries(identity), sleep)
     const sources: ContextBankResearchSource[] = []
     const chunks: ContextBankResearchChunk[] = []
 
     for (const result of results.slice(0, PAGE_LIMIT)) {
-      const page = await integrations.web.read(result.url, SOURCE_TEXT_LIMIT)
+      let page: WebPage
+      try {
+        page = await withTransientRetry(() => integrations.web.read(result.url, SOURCE_TEXT_LIMIT), sleep)
+      } catch {
+        continue
+      }
       const built = await sourceAndChunks(page, now())
       if (!built) continue
       sources.push(built.source)
@@ -256,7 +296,7 @@ export async function seedAnimeResearchForProject(
     await bank.replaceResearchSeed({ ...location, state: ready, sources, chunks })
     return { status: 'ready', identity }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = researchErrorMessage(error)
     await bank.setResearchState({
       ...location,
       state: state(setup.showQuery, 'error', now(), { identity, error: message.slice(0, 2_000) }),
