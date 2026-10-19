@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseVisionSidecarObservation, sidecarToolText } from './vision-sidecar'
+import { buildVisionSidecarPrompt, parseVisionSidecarObservation, sidecarToolText } from './vision-sidecar'
 
 describe('vision sidecar evidence', () => {
   it('replaces unavailable pictures with detailed timestamp-preserving visual evidence', () => {
@@ -25,5 +25,16 @@ describe('vision sidecar evidence', () => {
     const parsed = parseVisionSidecarObservation('```json\n{"summary":"Two-shot in bedroom.","frames":[{"timestamp":"00:10","description":"Mitsuki left, Yuya right.","editUse":"Safe two-shot."}],"uncertainty":[]}\n```')
     expect(parsed.frames[0].timestamp).toBe('00:10')
     expect(() => parseVisionSidecarObservation('{"summary":"x","frames":[]}')).toThrow(/frame observation/i)
+  })
+
+  it('asks for edit-grade evidence and anchors image order to tool timestamps', () => {
+    const prompt = buildVisionSidecarPrompt('Contact sheet 00:00–00:20. Cell 1 00:00, Cell 2 00:05, Cell 3 00:10, Cell 4 00:15.', 4)
+    expect(prompt).toContain('4 images')
+    expect(prompt).toContain('00:05')
+    expect(prompt).toContain('shot size')
+    expect(prompt).toContain('crop')
+    expect(prompt).toContain('sensitive')
+    expect(prompt).toContain('uncertainty')
+    expect(prompt).toContain('JSON')
   })
 })
