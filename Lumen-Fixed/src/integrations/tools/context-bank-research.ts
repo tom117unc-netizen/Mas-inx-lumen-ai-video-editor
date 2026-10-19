@@ -20,7 +20,7 @@ import { getProject, useEditor } from '@/editor/store'
 import { desktop, integrations as desktopIntegrations } from '@/lib/platform'
 import { seedAnimeResearchForProject } from '@/project/anime-research'
 import { flushContextBankWrites, recordResolvedAnimeResearchIdentity } from '@/project/context-bank-runtime'
-import { useSession } from '@/project/session'
+import { saveProject, useSession } from '@/project/session'
 import { int, num, obj, oneOf, str, type AgentTool, type ToolArgs } from './kit'
 
 export const DEFAULT_SHOW_RESEARCH_ITEMS = 8
@@ -212,6 +212,7 @@ export const CONTEXT_BANK_RESEARCH_TOOLS: AgentTool[] = [
           })
         : await seedAnimeResearchForProject(project, projectPath)
       recordResolvedAnimeResearchIdentity(project, research)
+      await saveProject()
       return {
         configured: true,
         changed,
