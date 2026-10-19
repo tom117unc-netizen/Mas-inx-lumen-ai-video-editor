@@ -10,6 +10,7 @@ export type AiEdit =
   | { op: 'setTransform'; sequenceId: string; clipId: string; transform: Partial<Clip['transform']> }
   | { op: 'setAudio'; sequenceId: string; clipId: string; audio: Partial<Clip['audio']> }
   | { op: 'setTrack'; sequenceId: string; trackId: string; changes: Partial<Pick<Track, 'muted' | 'hidden' | 'solo'>> }
+  | { op: 'addClip'; sequenceId: string; clip: Clip }
 
 export interface AiPatch { format: 'lumen-ai-patch'; version: 1; projectId: string; edits: AiEdit[] }
 export interface PatchResult { project: Project; changes: string[]; warnings: string[] }
@@ -41,46 +42,47 @@ export function applyAiPatch(original: Project, patch: AiPatch): PatchResult {
       changes.push(`${edit.sequenceId}/track/${edit.trackId}`)
       continue
     }
+    if (edit.op === 'addClip') {
+      const clip = edit.clip
+      if (!clip || typeof clip !== 'object' || !clip.id) throw new Error('Invalid clip')
+      if (seq.clips[clip.id]) throw new Error(`Clip already exists (duplicate ID): ${clip.id}`)
+      const track = seq.tracks.find(t => t.id === clip.trackId)
+      if (!track) throw new Error(`Unknown track: ${clip.trackId}`)
+      if (track.locked) throw new Error(`Track locked: ${clip.trackId}`)
+      if (track.kind !== 'video') throw new Error(`AI image clips require a video track: ${clip.trackId}`)
+      if (clip.kind !== 'image') throw new Error('AI addClip currently supports image clips only')
+      if (!clip.assetId || !project.assets[clip.assetId]) throw new Error(`Unknown asset: ${clip.assetId ?? ''}`)
+      if (project.assets[clip.assetId].kind !== 'image') throw new Error(`Asset is not an image: ${clip.assetId}`)
+      frame(clip.start, 'start'); frame(clip.duration, 'duration', false); frame(clip.inPoint, 'inPoint')
+      if (!finiteClipNumbers(clip)) throw new Error('Clip contains invalid numeric properties')
+      seq.clips[clip.id] = structuredClone(clip)
+      changes.push(`${edit.sequenceId}/clip/${clip.id}/addClip`)
+      continue
+    }
     const clip = seq.clips[edit.clipId]
     if (!clip) throw new Error(`Unknown clip: ${edit.clipId}`)
     if (seq.tracks.find(t => t.id === clip.trackId)?.locked) throw new Error(`Clip on locked track: ${clip.id}`)
     if ('expectedStart' in edit && edit.expectedStart !== undefined && clip.start !== edit.expectedStart) throw new Error(`Stale start for clip ${clip.id}`)
     switch (edit.op) {
       case 'move': frame(edit.start, 'start'); clip.start = edit.start; break
-      case 'trim':
-        frame(edit.start, 'start'); frame(edit.duration, 'duration', false); frame(edit.inPoint, 'inPoint')
-        clip.start = edit.start; clip.duration = edit.duration; clip.inPoint = edit.inPoint; break
-      case 'setText':
-        if (clip.kind !== 'text' || !clip.text) throw new Error(`Clip ${clip.id} is not a text clip`)
-        if (typeof edit.content !== 'string') throw new Error('Text content must be a string')
-        clip.text.content = edit.content; break
-      case 'setAsset':
-        if (typeof edit.assetId !== 'string' || !edit.assetId) throw new Error('Asset ID required')
-        if (!project.assets[edit.assetId]) throw new Error(`Unknown asset: ${edit.assetId}`)
-        if (!clip.assetId) throw new Error(`Clip ${clip.id} does not reference a replaceable media asset`)
-        clip.assetId = edit.assetId; break
+      case 'trim': frame(edit.start, 'start'); frame(edit.duration, 'duration', false); frame(edit.inPoint, 'inPoint'); clip.start = edit.start; clip.duration = edit.duration; clip.inPoint = edit.inPoint; break
+      case 'setText': if (clip.kind !== 'text' || !clip.text) throw new Error(`Clip ${clip.id} is not a text clip`); if (typeof edit.content !== 'string') throw new Error('Text content must be a string'); clip.text.content = edit.content; break
+      case 'setAsset': if (typeof edit.assetId !== 'string' || !edit.assetId) throw new Error('Asset ID required'); if (!project.assets[edit.assetId]) throw new Error(`Unknown asset: ${edit.assetId}`); if (!clip.assetId) throw new Error(`Clip ${clip.id} does not reference a replaceable media asset`); clip.assetId = edit.assetId; break
       case 'setTransform':
         if (!edit.transform || typeof edit.transform !== 'object' || Array.isArray(edit.transform)) throw new Error('Invalid transform')
-        for (const [key, value] of Object.entries(edit.transform)) {
-          if (!['x','y','z','scale','rotation','opacity','rotateX','rotateY'].includes(key) || typeof value !== 'number') throw new Error(`Invalid transform property: ${key}`)
-          finite(value, key)
-          if (key === 'opacity' && (value < 0 || value > 1)) throw new Error('Opacity must be 0..1')
-          if (key === 'scale' && value <= 0) throw new Error('Scale must be positive')
-        }
+        for (const [key, value] of Object.entries(edit.transform)) { if (!['x','y','z','scale','rotation','opacity','rotateX','rotateY'].includes(key) || typeof value !== 'number') throw new Error(`Invalid transform property: ${key}`); finite(value, key); if (key === 'opacity' && (value < 0 || value > 1)) throw new Error('Opacity must be 0..1'); if (key === 'scale' && value <= 0) throw new Error('Scale must be positive') }
         Object.assign(clip.transform, edit.transform); break
       case 'setAudio':
         if (!edit.audio || typeof edit.audio !== 'object' || Array.isArray(edit.audio)) throw new Error('Invalid audio')
-        for (const [key, value] of Object.entries(edit.audio)) {
-          if (!['volume','fadeIn','fadeOut','enhance','denoise','detached'].includes(key)) throw new Error(`Invalid audio property: ${key}`)
-          if (['volume','fadeIn','fadeOut'].includes(key)) {
-            if (typeof value !== 'number') throw new Error(`Invalid ${key}`)
-            if (key === 'volume') finite(value, key); else frame(value, key)
-          } else if (typeof value !== 'boolean') throw new Error(`Invalid ${key}`)
-        }
+        for (const [key, value] of Object.entries(edit.audio)) { if (!['volume','fadeIn','fadeOut','enhance','denoise','detached'].includes(key)) throw new Error(`Invalid audio property: ${key}`); if (['volume','fadeIn','fadeOut'].includes(key)) { if (typeof value !== 'number') throw new Error(`Invalid ${key}`); if (key === 'volume') finite(value, key); else frame(value, key) } else if (typeof value !== 'boolean') throw new Error(`Invalid ${key}`) }
         Object.assign(clip.audio, edit.audio); break
       default: throw new Error('Unknown edit operation')
     }
     changes.push(`${edit.sequenceId}/clip/${clip.id}/${edit.op}`)
   }
   return { project, changes, warnings: createAiManifest(project).inventory.warnings }
+}
+
+function finiteClipNumbers(clip: Clip): boolean {
+  return [clip.speed, ...Object.values(clip.transform)].every(Number.isFinite) && clip.speed > 0 && clip.transform.scale > 0 && clip.transform.opacity >= 0 && clip.transform.opacity <= 1
 }
