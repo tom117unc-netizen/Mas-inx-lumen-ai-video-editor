@@ -16,6 +16,7 @@ const EXPECTED_TOOLS = [
   'plan_pngtuber_mouth_sync',
   'plan_pngtuber_sprite_replacement',
   'propose_pngtuber_sprite_replacement',
+  'propose_pngtuber_mouth_sync',
 ]
 
 describe('ANIME_REVIEW_TOOLS', () => {
@@ -33,6 +34,12 @@ describe('ANIME_REVIEW_TOOLS', () => {
     expect(names.every((name) => typeof name === 'string' && name.trim().length > 0)).toBe(true)
     expect(new Set(names).size).toBe(names.length)
     for (const expected of EXPECTED_TOOLS) expect(names.filter(name => name === expected)).toHaveLength(1)
+  })
+
+  it('registers mouth sync as an approval proposal rather than a direct mutation tool', () => {
+    const tool = ANIME_REVIEW_TOOLS.find(tool => tool.name === 'propose_pngtuber_mouth_sync')
+    expect(tool).toBeDefined()
+    expect(tool?.description).toMatch(/proposal|review|approval/i)
   })
 
   it('does not expose destructive or low-level Context Bank capabilities to the AI', () => {
