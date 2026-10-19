@@ -13,6 +13,7 @@ const EXPECTED_TOOLS = [
   'search_show_research',
   'record_research_prior',
   'plan_source_scene_search',
+  'plan_anime_review_rough_cut',
   'plan_pngtuber_mouth_sync',
   'plan_pngtuber_sprite_replacement',
   'propose_pngtuber_sprite_replacement',
@@ -40,6 +41,12 @@ describe('ANIME_REVIEW_TOOLS', () => {
     const tool = ANIME_REVIEW_TOOLS.find(tool => tool.name === 'propose_pngtuber_mouth_sync')
     expect(tool).toBeDefined()
     expect(tool?.description).toMatch(/proposal|review|approval/i)
+  })
+
+  it('registers rough cut planning as non-mutating and evidence-aware', () => {
+    const tool = ANIME_REVIEW_TOOLS.find(tool => tool.name === 'plan_anime_review_rough_cut')
+    expect(tool).toBeDefined()
+    expect(tool?.description).toMatch(/plan|non-mutating|verified|evidence/i)
   })
 
   it('does not expose destructive or low-level Context Bank capabilities to the AI', () => {
