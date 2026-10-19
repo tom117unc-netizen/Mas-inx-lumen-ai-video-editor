@@ -146,6 +146,10 @@ export const APP_IPC = {
 
   contextBankSync: 'lumen:context-bank:sync',
   contextBankQuery: 'lumen:context-bank:query',
+  contextBankPutTranscript: 'lumen:context-bank:put-transcript',
+  contextBankGetTranscript: 'lumen:context-bank:get-transcript',
+  contextBankPutObservations: 'lumen:context-bank:put-observations',
+  contextBankGetObservations: 'lumen:context-bank:get-observations',
   contextBankStatus: 'lumen:context-bank:status',
   contextBankCopySaveAs: 'lumen:context-bank:copy-save-as',
   contextBankClear: 'lumen:context-bank:clear',
