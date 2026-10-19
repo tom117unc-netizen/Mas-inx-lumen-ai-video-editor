@@ -1,4 +1,5 @@
 import { uid } from '@/lib/id'
+import { sanitizeAnimeReviewSetup, type AnimeReviewSetup } from './anime-review-project'
 import { createTrack, TRACK_HEIGHTS } from './defaults'
 import type { Project, ProjectSettings } from './types'
 
@@ -34,8 +35,13 @@ export function defaultTracks() {
 }
 
 /** A blank project with the standard track layout. */
-export function createEmptyProject(name = 'Untitled', settings: Partial<ProjectSettings> = {}): Project {
+export function createEmptyProject(
+  name = 'Untitled',
+  settings: Partial<ProjectSettings> = {},
+  animeReview?: AnimeReviewSetup,
+): Project {
   const tracks = defaultTracks()
+  const review = sanitizeAnimeReviewSetup(animeReview)
   return {
     id: uid('proj'),
     name,
@@ -44,6 +50,7 @@ export function createEmptyProject(name = 'Untitled', settings: Partial<ProjectS
     tracks,
     clips: {},
     markers: [],
+    ...(review ? { animeReview: review } : {}),
     createdAt: Date.now(),
   }
 }
