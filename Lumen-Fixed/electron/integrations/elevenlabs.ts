@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { GeneratedAsset, Job, TranscriptSegment } from '../../shared/integrations'
+import {
+  ELEVENLABS_SCRIBE_ANALYSIS_VERSION,
+  ELEVENLABS_SCRIBE_MODEL,
+  type ElevenLabsScribeJobDetail,
+} from '../../shared/scribe'
 import { createJob, failJob, finishJob, setCanceller, updateJob } from './jobs'
 import { ensureDir, mediaRoot, mediaUrl } from './paths'
 import { getSecret, secretHint, setSecret } from './secrets'
@@ -202,15 +207,31 @@ export function transcribe(req: { wav: ArrayBuffer; name: string; languageCode?:
   return track(`Transcribe — ${slug(req.name)}`, async (job, signal) => {
     updateJob(job.id, { message: 'Transcribing…' })
     const form = new FormData()
-    form.set('model_id', 'scribe_v2')
+    form.set('model_id', ELEVENLABS_SCRIBE_MODEL)
     form.set('timestamps_granularity', 'word')
     form.set('tag_audio_events', 'false')
     if (req.languageCode) form.set('language_code', req.languageCode)
     form.set('file', new Blob([req.wav], { type: 'audio/wav' }), 'audio.wav')
     const res = await call('/v1/speech-to-text', { method: 'POST', body: form, signal })
     const json = (await res.json()) as { text: string; language_code?: string; words?: { text: string; start: number; end: number; type: string }[] }
-    const words = (json.words ?? []).filter((w) => w.type === 'word').map((w) => ({ text: w.text.trim(), start: w.start, end: w.end }))
+    const words = (json.words ?? [])
+      .filter((w) => w.type === 'word')
+      .map((w) => ({ text: w.text.trim(), start: w.start, end: w.end }))
+      .filter((w) => w.text && Number.isFinite(w.start) && Number.isFinite(w.end) && w.start >= 0 && w.end >= w.start)
     const segments = phrases(words)
-    finishJob(job.id, { transcript: segments, message: `${segments.length} phrases · ${json.language_code ?? 'auto'}` })
+    const detail: ElevenLabsScribeJobDetail = {
+      transcriptWords: words,
+      transcriptMeta: {
+        provider: 'elevenlabs',
+        model: ELEVENLABS_SCRIBE_MODEL,
+        ...(json.language_code ? { language: json.language_code } : {}),
+        analysisVersion: ELEVENLABS_SCRIBE_ANALYSIS_VERSION,
+      },
+    }
+    finishJob(job.id, {
+      transcript: segments,
+      ...detail,
+      message: `${segments.length} phrases · ${json.language_code ?? 'auto'}`,
+    } as Partial<Job> & ElevenLabsScribeJobDetail)
   })
 }
