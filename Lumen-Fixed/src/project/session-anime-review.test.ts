@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     requestFit: vi.fn(),
     pause: vi.fn(),
     seek: vi.fn(),
+    seedAnimeResearch: vi.fn(async () => ({ status: 'ready' as const })),
   }
 })
 
@@ -71,6 +72,10 @@ vi.mock('@/lib/platform', () => ({
   },
 }))
 
+vi.mock('./anime-research', () => ({
+  seedAnimeResearchForProject: mocks.seedAnimeResearch,
+}))
+
 import { newProject, useSession } from './session'
 
 describe('anime review project creation lifecycle', () => {
@@ -85,6 +90,7 @@ describe('anime review project creation lifecycle', () => {
     mocks.requestFit.mockClear()
     mocks.pause.mockClear()
     mocks.seek.mockClear()
+    mocks.seedAnimeResearch.mockClear()
     useSession.setState({ path: null, savedVersion: 0, home: true, recent: [], recovery: null, busy: false, hasProject: false })
   })
 
@@ -93,6 +99,7 @@ describe('anime review project creation lifecycle', () => {
     expect(mocks.editorState.project.name).toBe('Ordinary')
     expect(mocks.editorState.project.animeReview).toBeUndefined()
     expect(mocks.saveAs).not.toHaveBeenCalled()
+    expect(mocks.seedAnimeResearch).not.toHaveBeenCalled()
     expect(useSession.getState().path).toBeNull()
   })
 
@@ -110,6 +117,11 @@ describe('anime review project creation lifecycle', () => {
     expect(mocks.saveAs.mock.calls[0]?.[0]).toBe('Frieren')
     expect(JSON.parse(mocks.saveAs.mock.calls[0]?.[1] as string).animeReview).toEqual({ version: 1, showQuery: 'Frieren' })
     expect(useSession.getState().path).toBe('D:\\Reviews\\Frieren\\Frieren.lumen')
+    expect(mocks.seedAnimeResearch).toHaveBeenCalledTimes(1)
+    expect(mocks.seedAnimeResearch).toHaveBeenCalledWith(
+      mocks.editorState.project,
+      'D:\\Reviews\\Frieren\\Frieren.lumen',
+    )
   })
 
   it('keeps the anime review project open but unsaved when Save As is cancelled', async () => {
@@ -124,5 +136,6 @@ describe('anime review project creation lifecycle', () => {
     expect(mocks.editorState.project.animeReview?.showQuery).toBe('Frieren')
     expect(useSession.getState()).toMatchObject({ path: null, home: false, hasProject: true })
     expect(mocks.saveAs).toHaveBeenCalledTimes(1)
+    expect(mocks.seedAnimeResearch).not.toHaveBeenCalled()
   })
 })
