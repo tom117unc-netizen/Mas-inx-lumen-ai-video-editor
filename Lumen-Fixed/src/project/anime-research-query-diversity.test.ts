@@ -1,0 +1,103 @@
+import { describe, expect, it, vi } from 'vitest'
+import type { ContextBankAPI } from '@shared/context-bank'
+import type { ContextBankResearchStatusResult } from '@shared/context-bank-research'
+import type { IntegrationsAPI } from '@shared/integrations'
+import { createEmptyProject } from '@/editor/new-project'
+import { seedAnimeResearchForProject } from './anime-research'
+
+const projectPath = 'D:\\Reviews\\show.lumen'
+
+function project() {
+  const value = createEmptyProject('Frieren', {}, { version: 1, showQuery: 'Frieren' })
+  value.id = 'project-1'
+  return value
+}
+
+function researchStatus(patch: Partial<ContextBankResearchStatusResult> = {}): ContextBankResearchStatusResult {
+  return {
+    projectId: 'project-1',
+    sourceCount: 0,
+    chunkCount: 0,
+    priorCount: 0,
+    warnings: [],
+    ...patch,
+  }
+}
+
+function bank() {
+  return {
+    getResearchStatus: vi.fn(async () => researchStatus()),
+    setResearchState: vi.fn(async request => researchStatus({ state: request.state })),
+    replaceResearchSeed: vi.fn(async request => researchStatus({
+      state: request.state,
+      sourceCount: request.sources.length,
+      chunkCount: request.chunks.length,
+    })),
+  } as unknown as ContextBankAPI
+}
+
+const resolved = {
+  status: 'resolved' as const,
+  query: 'Frieren',
+  selected: {
+    source: 'anilist' as const,
+    externalId: '154587',
+    canonicalTitle: 'Frieren: Beyond Journey’s End',
+    aliases: ['Sousou no Frieren'],
+    score: 1,
+    year: 2023,
+    format: 'TV',
+    episodes: 28,
+  },
+  candidates: [],
+}
+
+describe('anime research query diversity', () => {
+  it('reserves source capacity for later episode-focused queries instead of letting the first broad query consume every slot', async () => {
+    const contextBank = bank()
+    const search = vi.fn(async (query: string) => {
+      if (query.includes('overview characters')) {
+        return Array.from({ length: 8 }, (_, index) => ({
+          title: `Generic character result ${index}`,
+          url: `https://generic.example/${index}`,
+          snippet: `Character overview ${index}`,
+        }))
+      }
+      if (query.includes('episode guide')) {
+        return [{
+          title: 'Episode guide',
+          url: 'https://episodes.example/guide',
+          snippet: 'Episode 2: the party reaches the village.',
+        }]
+      }
+      return []
+    })
+    const read = vi.fn(async (url: string) => ({
+      url,
+      title: url.includes('episodes.example') ? 'Episode guide' : 'Character overview',
+      site: new URL(url).hostname,
+      text: url.includes('episodes.example')
+        ? 'Episode 2\nThe party reaches the village and learns an important clue.'
+        : 'Character overview with no episode locator information.',
+      links: [],
+      images: [],
+    }))
+    const integrations = {
+      animeCatalog: { resolve: vi.fn(async () => resolved) },
+      web: { search, read },
+    } as unknown as IntegrationsAPI
+
+    const result = await seedAnimeResearchForProject(project(), projectPath, {
+      bank: contextBank,
+      integrations,
+      now: () => 10,
+    })
+
+    expect(result).toMatchObject({ status: 'ready' })
+    expect(search.mock.calls.some(([query]) => String(query).includes('episode guide'))).toBe(true)
+    const request = vi.mocked(contextBank.replaceResearchSeed).mock.calls[0]?.[0]
+    expect(request?.sources.some(source => source.url === 'https://episodes.example/guide')).toBe(true)
+    expect(request?.chunks.some(chunk => chunk.episodeNumber === 2)).toBe(true)
+    expect(request?.sources.length).toBeLessThanOrEqual(8)
+  })
+})
