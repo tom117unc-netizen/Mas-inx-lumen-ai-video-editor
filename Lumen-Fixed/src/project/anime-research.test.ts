@@ -104,11 +104,11 @@ describe('anime research seeding lifecycle', () => {
     expect(result).toMatchObject({ status: 'ready', identity: { externalId: '154587' } })
     expect(contextBank.getResearchStatus).toHaveBeenCalledTimes(1)
     expect(api.animeCatalog.resolve).toHaveBeenCalledTimes(1)
-    expect(api.web.search.mock.calls.length).toBeLessThanOrEqual(4)
+    expect(vi.mocked(api.web.search).mock.calls.length).toBeLessThanOrEqual(4)
     expect(api.web.read).toHaveBeenCalledTimes(1)
     expect(contextBank.replaceResearchSeed).toHaveBeenCalledTimes(1)
 
-    const request = contextBank.replaceResearchSeed.mock.calls[0]?.[0]
+    const request = vi.mocked(contextBank.replaceResearchSeed).mock.calls[0]?.[0]
     expect(request?.sources).toHaveLength(1)
     expect(request?.sources[0]?.text.length).toBeLessThanOrEqual(30_000)
     expect(request?.chunks.some((chunk) => chunk.episodeNumber === 2)).toBe(true)
