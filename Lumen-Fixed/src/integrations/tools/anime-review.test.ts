@@ -9,6 +9,7 @@ const EXPECTED_TOOLS = [
   'get_source_transcript',
   'get_source_observations',
   'record_source_observation',
+  'configure_anime_review_project',
   'get_show_research_status',
   'search_show_research',
   'record_research_prior',
