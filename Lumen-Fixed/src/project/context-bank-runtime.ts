@@ -1,7 +1,7 @@
 import { getProject, subscribeCommittedEdits, useEditor } from '@/editor/store'
 import { desktop } from '@/lib/platform'
 import { useSession } from './session'
-import { createContextBankSynchronizer } from './context-bank-sync'
+import { createContextBankSynchronizer, type ContextBankSynchronizer } from './context-bank-sync'
 
 export type ContextBankPathAction = 'none' | 'reconcile' | 'copy'
 
@@ -23,6 +23,12 @@ export function contextBankPathAction(
 }
 
 let started = false
+let activeSynchronizer: ContextBankSynchronizer | null = null
+
+/** Waits until every Context Bank write already queued by committed edits has finished. */
+export async function flushContextBankWrites() {
+  await activeSynchronizer?.flush()
+}
 
 /**
  * Connects successful editor commits and project-path changes to the persistent
@@ -41,6 +47,7 @@ export function startContextBankRuntime() {
       projectPath: useSession.getState().path,
     }),
   )
+  activeSynchronizer = synchronizer
 
   let previousProjectId = getProject().id
   let sawLoad = false
