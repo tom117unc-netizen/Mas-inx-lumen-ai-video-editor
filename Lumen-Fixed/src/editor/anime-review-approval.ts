@@ -42,6 +42,8 @@ export function previewAnimeAiPatch(project: Project, patch: AiPatch): ReviewPro
     if (!before || !after) throw new Error('Sequence missing after patch')
     if (edit.op === 'setTrack') {
       changes.push({ target: `${edit.sequenceId}/track/${edit.trackId}`, before: structuredClone(before.tracks.find(t => t.id === edit.trackId)), after: structuredClone(after.tracks.find(t => t.id === edit.trackId)) })
+    } else if (edit.op === 'addClip') {
+      changes.push({ target: `${edit.sequenceId}/clip/${edit.clip.id}`, before: undefined, after: structuredClone(after.clips[edit.clip.id]) })
     } else {
       changes.push({ target: `${edit.sequenceId}/clip/${edit.clipId}`, before: structuredClone(before.clips[edit.clipId]), after: structuredClone(after.clips[edit.clipId]) })
     }
