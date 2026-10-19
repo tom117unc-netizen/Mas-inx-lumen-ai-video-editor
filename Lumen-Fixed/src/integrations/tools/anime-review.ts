@@ -6,6 +6,7 @@ import { flushContextBankWrites } from '@/project/context-bank-runtime'
 import { useSession } from '@/project/session'
 import { CONTEXT_BANK_ANALYSIS_TOOLS } from './context-bank-analysis'
 import { makeContextBankQuery } from './context-bank-query'
+import { CONTEXT_BANK_RESEARCH_TOOLS } from './context-bank-research'
 import { obj, str, num, int, oneOf, type AgentTool } from './kit'
 
 export const ANIME_REVIEW_TOOLS: AgentTool[] = [
@@ -76,4 +77,5 @@ export const ANIME_REVIEW_TOOLS: AgentTool[] = [
     },
   },
   ...CONTEXT_BANK_ANALYSIS_TOOLS,
+  ...CONTEXT_BANK_RESEARCH_TOOLS,
 ]
