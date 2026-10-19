@@ -20,6 +20,7 @@ export interface AnimeResearchDependencies {
   integrations: IntegrationsAPI
   now?: () => number
   allowRetry?: boolean
+  refreshReady?: boolean
 }
 
 export type AnimeResearchSeedResult =
@@ -333,7 +334,7 @@ export async function seedAnimeResearchForProject(
   const existing = await bank.getResearchStatus(location)
   const sameQuery = existing.state?.showQuery === setup.showQuery
 
-  if (sameQuery && existing.state?.status === 'ready') {
+  if (sameQuery && existing.state?.status === 'ready' && !resolvedDependencies.refreshReady) {
     return { status: 'ready', reused: true, identity: existing.state.identity }
   }
   if (sameQuery && existing.state?.status === 'error' && !resolvedDependencies.allowRetry) {
