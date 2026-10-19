@@ -1,8 +1,9 @@
+import type { ModelMessage } from 'ai'
 import type { ModelInfo } from '../../../shared/ai'
 
+export interface VisionSidecarPicture { data: string; mimeType: string }
 export interface VisionSidecarFrame { timestamp: string; description: string; editUse?: string }
 export interface VisionSidecarObservation { summary: string; frames: VisionSidecarFrame[]; uncertainty?: string[] }
-
 export const shouldUseVisionSidecar = (nativeVision: boolean, pictureCount: number) => !nativeVision && pictureCount > 0
 
 export function selectVisionSidecar(models: ModelInfo[], preferredId?: string) {
@@ -14,6 +15,10 @@ export function selectVisionSidecar(models: ModelInfo[], preferredId?: string) {
 
 export function buildVisionSidecarPrompt(toolText: string, pictureCount: number) {
   return `You are the visual-analysis sidecar for a professional video editor. Inspect all ${pictureCount} images in order. The editor tool metadata below is authoritative for timing and image order; never invent timestamps or claim metadata that is not present.\n\nTOOL METADATA:\n${toolText}\n\nReturn JSON only with this exact shape:\n{"summary":"...","frames":[{"timestamp":"timestamp/cell label from metadata","description":"...","editUse":"..."}],"uncertainty":["..."]}\n\nFor every usable image, make description/editUse detailed enough for another model to edit without seeing it. Include where visible: characters/subjects and actions/expressions; shot size and camera angle/movement cues; composition and screen position; readable subtitles/on-screen text; overlays/PNGTuber and occlusion; lighting/clarity; continuity with adjacent frames; useful cut/reaction/transition points; and concrete crop, zoom, reframe, blur or cutaway options. If potentially sensitive imagery appears, describe only what is necessary to edit it safely and identify the sensitive region plus usable crop/reframe/blur/cutaway options. Do not avoid relevant footage merely because it needs reframing. Put anything unreadable, ambiguous, inferred, or uncertain in uncertainty instead of guessing. Preserve image order and anchor each frame to the closest timestamp/cell label supplied by the tool.`
+}
+
+export function visionSidecarMessages(toolText: string, pictures: VisionSidecarPicture[]): ModelMessage[] {
+  return [{ role: 'user', content: [{ type: 'text', text: buildVisionSidecarPrompt(toolText, pictures.length) }, ...pictures.map((picture) => ({ type: 'image' as const, image: picture.data, mediaType: picture.mimeType }))] }]
 }
 
 export function parseVisionSidecarObservation(raw: string): VisionSidecarObservation {
