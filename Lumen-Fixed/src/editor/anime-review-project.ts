@@ -93,6 +93,23 @@ export function animeReviewProjectFromTitle(showTitle: string): { name: string; 
 }
 
 /**
+ * Builds portable anime-review intent for a project that already exists.
+ * Identity is retained only when the normalized show query is unchanged; a
+ * changed title deliberately drops it so research for one show cannot leak
+ * into another.
+ */
+export function animeReviewSetupForExistingProject(
+  current: AnimeReviewSetup | undefined,
+  showQuery: string,
+): AnimeReviewSetup | undefined {
+  const next = sanitizeAnimeReviewSetup({ version: 1, showQuery })
+  if (!next) return undefined
+  return current?.showQuery === next.showQuery && current.identity
+    ? { ...next, identity: current.identity }
+    : next
+}
+
+/**
  * Normalizes the optional review setup whenever a project enters the editor.
  * The project itself remains authoritative; this merely prevents malformed or
  * stale research-shaped payloads from travelling in the canonical document.
