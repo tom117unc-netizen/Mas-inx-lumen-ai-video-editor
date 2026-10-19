@@ -74,11 +74,11 @@ function api(
 }
 
 describe('anime research resilience', () => {
-  it('skips a persistently failing page and still becomes ready from another page', async () => {
+  it('skips a persistently failing page and still becomes ready from another page without mixing snippet fallback into a successful full-page seed', async () => {
     const contextBank = bank()
     const search = vi.fn(async () => [
-      { title: 'bad', url: 'https://bad.example/guide', snippet: 'bad' },
-      { title: 'good', url: 'https://good.example/guide', snippet: 'good' },
+      { title: 'bad', url: 'https://bad.example/guide', snippet: 'bad snippet should remain fallback-only' },
+      { title: 'good', url: 'https://good.example/guide', snippet: 'good snippet should not replace the page' },
     ])
     const read = vi.fn(async (url: string) => {
       if (url.includes('bad.example')) throw new Error('503 Service Temporarily Unavailable')
@@ -95,6 +95,11 @@ describe('anime research resilience', () => {
     expect(read.mock.calls.filter(([url]) => String(url).includes('bad.example'))).toHaveLength(3)
     expect(read.mock.calls.filter(([url]) => String(url).includes('good.example'))).toHaveLength(1)
     expect(contextBank.replaceResearchSeed).toHaveBeenCalledTimes(1)
+    const request = vi.mocked(contextBank.replaceResearchSeed).mock.calls[0]?.[0]
+    expect(request?.sources).toHaveLength(1)
+    expect(request?.sources[0]?.url).toBe('https://good.example/guide')
+    expect(request?.sources[0]?.text).not.toContain('Search-result snippet only')
+    expect(request?.sources[0]?.text).not.toContain('bad snippet should remain fallback-only')
   })
 
   it('retries one transient page failure and succeeds on the next attempt', async () => {
@@ -140,10 +145,14 @@ describe('anime research resilience', () => {
     expect(contextBank.replaceResearchSeed).toHaveBeenCalledTimes(1)
   })
 
-  it('stays retryable error when every candidate page fails', async () => {
+  it('falls back to clearly labelled search-result snippets when every full-page read fails', async () => {
     const contextBank = bank()
     const search = vi.fn(async () => [
-      { title: 'bad', url: 'https://bad.example/guide', snippet: 'bad' },
+      {
+        title: 'Episode guide result',
+        url: 'https://bad.example/guide',
+        snippet: 'Episode 2: Frieren reaches the village and learns an important clue.',
+      },
     ])
     const read = vi.fn(async () => {
       throw new Error('503 Service Temporarily Unavailable')
@@ -153,6 +162,33 @@ describe('anime research resilience', () => {
       bank: contextBank,
       integrations: api(search as IntegrationsAPI['web']['search'], read as IntegrationsAPI['web']['read']),
       now: () => 4,
+    })
+
+    expect(result).toMatchObject({ status: 'ready' })
+    expect(read).toHaveBeenCalledTimes(3)
+    expect(contextBank.replaceResearchSeed).toHaveBeenCalledTimes(1)
+    const request = vi.mocked(contextBank.replaceResearchSeed).mock.calls[0]?.[0]
+    expect(request?.sources).toHaveLength(1)
+    expect(request?.chunks.length).toBeGreaterThan(0)
+    expect(request?.sources[0]?.url).toBe('https://bad.example/guide')
+    expect(request?.sources[0]?.text).toContain('Search-result snippet only')
+    expect(request?.sources[0]?.text).toContain('lower-confidence locator evidence')
+    expect(request?.sources[0]?.text).toContain('Episode 2: Frieren reaches the village')
+  })
+
+  it('stays retryable error when every candidate page fails and no useful snippet exists', async () => {
+    const contextBank = bank()
+    const search = vi.fn(async () => [
+      { title: 'bad', url: 'https://bad.example/guide', snippet: '' },
+    ])
+    const read = vi.fn(async () => {
+      throw new Error('503 Service Temporarily Unavailable')
+    })
+
+    const result = await seedAnimeResearchForProject(project(), projectPath, {
+      bank: contextBank,
+      integrations: api(search as IntegrationsAPI['web']['search'], read as IntegrationsAPI['web']['read']),
+      now: () => 5,
     })
 
     expect(result).toMatchObject({ status: 'error', retryable: true })
@@ -175,7 +211,7 @@ describe('anime research resilience', () => {
     const result = await seedAnimeResearchForProject(project(), projectPath, {
       bank: contextBank,
       integrations: api(search as IntegrationsAPI['web']['search'], read as IntegrationsAPI['web']['read']),
-      now: () => 5,
+      now: () => 6,
     })
 
     expect(result).toMatchObject({ status: 'ready' })
