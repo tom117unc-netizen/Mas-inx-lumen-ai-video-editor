@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/editor/store', async importOriginal => {
   const actual = await importOriginal<typeof import('@/editor/store')>()
-  return { ...actual, getProject: () => ({ id: mocks.projectId }) }
+  return { ...actual, getProject: () => ({ id: mocks.projectId, assets: {} }) }
 })
 vi.mock('@/project/session', () => ({ useSession: { getState: () => ({ path: mocks.path }) } }))
 vi.mock('@/project/context-bank-runtime', () => ({ flushContextBankWrites: mocks.flush }))
