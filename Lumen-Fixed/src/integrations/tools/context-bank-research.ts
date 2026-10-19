@@ -15,9 +15,11 @@ import {
   CONTEXT_BANK_RESEARCH_SEARCH_ITEMS_MAX,
   validateResearchPrior,
 } from '@shared/context-bank-research'
-import { getProject } from '@/editor/store'
+import { animeReviewSetupForExistingProject } from '@/editor/anime-review-project'
+import { getProject, useEditor } from '@/editor/store'
 import { desktop } from '@/lib/platform'
-import { flushContextBankWrites } from '@/project/context-bank-runtime'
+import { seedAnimeResearchForProject } from '@/project/anime-research'
+import { flushContextBankWrites, recordResolvedAnimeResearchIdentity } from '@/project/context-bank-runtime'
 import { useSession } from '@/project/session'
 import { int, num, obj, oneOf, str, type AgentTool, type ToolArgs } from './kit'
 
@@ -177,6 +179,41 @@ async function barrier() {
 }
 
 export const CONTEXT_BANK_RESEARCH_TOOLS: AgentTool[] = [
+  {
+    name: 'configure_anime_review_project',
+    description: 'Configure an existing saved Lumen project as an anime/show review using an explicit show title, then initialize or refresh its project-local research cache. Never infers the show from the project name. Reusing the same query preserves resolved identity; changing the query drops stale identity and reseeds research for the new show.',
+    inputSchema: obj({
+      show_query: str('Exact anime/show title to attach to this existing project.', { maxLength: 300 }),
+    }, ['show_query']),
+    run: async args => {
+      const projectPath = useSession.getState().path
+      if (!projectPath) throw new Error('Save the project before configuring anime-review research.')
+      const showQuery = requiredText(args, 'show_query', 'Show query', 300)
+      const state = useEditor.getState()
+      const setup = animeReviewSetupForExistingProject(state.project.animeReview, showQuery)
+      if (!setup) throw new Error('Show query must be a non-empty title up to 300 characters.')
+
+      const current = state.project.animeReview
+      const changed = !current || current.showQuery !== setup.showQuery || current.identity !== setup.identity
+      if (changed) {
+        useEditor.setState({
+          project: { ...state.project, animeReview: setup },
+          version: state.version + 1,
+        })
+      }
+
+      await flushContextBankWrites()
+      const project = getProject()
+      const research = await seedAnimeResearchForProject(project, projectPath)
+      recordResolvedAnimeResearchIdentity(project, research)
+      return {
+        configured: true,
+        changed,
+        show_query: setup.showQuery,
+        research,
+      }
+    },
+  },
   {
     name: 'get_show_research_status',
     description: 'Read the current cached show-research state for this saved anime-review project, including whether identity resolution is ready, ambiguous, or retryable and how much research is cached. Cache-only: this never performs web research.',
