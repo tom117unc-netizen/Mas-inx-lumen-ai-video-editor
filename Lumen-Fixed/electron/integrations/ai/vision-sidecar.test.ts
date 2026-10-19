@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildVisionSidecarPrompt, parseVisionSidecarObservation, selectVisionSidecar, sidecarToolText } from './vision-sidecar'
+import { buildVisionSidecarPrompt, parseVisionSidecarObservation, selectVisionSidecar, sidecarToolText, visionFailureToolText } from './vision-sidecar'
 
 describe('vision sidecar evidence', () => {
   it('replaces unavailable pictures with detailed timestamp-preserving visual evidence', () => {
@@ -11,7 +11,6 @@ describe('vision sidecar evidence', () => {
       ],
       uncertainty: ['00:15 subtitle wording is too small to read confidently.'],
     })
-
     expect(text).toContain('VISUAL EVIDENCE FROM VISION SIDECAR')
     expect(text).toContain('00:15')
     expect(text).toContain('Medium shot of Mitsuki')
@@ -46,5 +45,12 @@ describe('vision sidecar evidence', () => {
     ]
     expect(selectVisionSidecar(models, 'vision-a')?.id).toBe('vision-a')
     expect(selectVisionSidecar(models, 'missing')?.id).toBe('vision-b')
+  })
+
+  it('makes visual failure explicit instead of inviting metadata-based guessing', () => {
+    const text = visionFailureToolText('Contact sheet metadata.', 'No configured vision-capable model.')
+    expect(text).toContain('VISUAL INSPECTION FAILED')
+    expect(text).toContain('Do not infer visual facts')
+    expect(text).toContain('No configured vision-capable model')
   })
 })
