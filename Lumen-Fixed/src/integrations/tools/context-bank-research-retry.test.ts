@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
     animeReview: { version: 1, showQuery: 'Frieren' },
   },
   setState: vi.fn(),
+  subscribe: vi.fn(() => () => {}),
   flush: vi.fn(async () => {}),
   recordIdentity: vi.fn(),
   seed: vi.fn(async (_project: unknown, _projectPath: string, dependencies?: { allowRetry?: boolean }) => (
@@ -20,6 +21,7 @@ vi.mock('@/editor/store', () => ({
   useEditor: {
     getState: () => ({ project: mocks.project, version: 1 }),
     setState: mocks.setState,
+    subscribe: mocks.subscribe,
   },
 }))
 
