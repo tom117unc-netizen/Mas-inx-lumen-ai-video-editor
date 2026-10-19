@@ -1,24 +1,14 @@
 import type { ModelInfo } from '../../../shared/ai'
 
-export interface VisionSidecarFrame {
-  timestamp: string
-  description: string
-  editUse?: string
-}
+export interface VisionSidecarFrame { timestamp: string; description: string; editUse?: string }
+export interface VisionSidecarObservation { summary: string; frames: VisionSidecarFrame[]; uncertainty?: string[] }
 
-export interface VisionSidecarObservation {
-  summary: string
-  frames: VisionSidecarFrame[]
-  uncertainty?: string[]
-}
+export const shouldUseVisionSidecar = (nativeVision: boolean, pictureCount: number) => !nativeVision && pictureCount > 0
 
 export function selectVisionSidecar(models: ModelInfo[], preferredId?: string) {
   const vision = models.filter((model) => model.vision === true)
   if (!vision.length) return undefined
-  if (preferredId) {
-    const preferred = vision.find((model) => model.id === preferredId)
-    if (preferred) return preferred
-  }
+  if (preferredId) { const preferred = vision.find((model) => model.id === preferredId); if (preferred) return preferred }
   return [...vision].sort((a, b) => (b.context ?? 0) - (a.context ?? 0))[0]
 }
 
@@ -29,24 +19,12 @@ export function buildVisionSidecarPrompt(toolText: string, pictureCount: number)
 export function parseVisionSidecarObservation(raw: string): VisionSidecarObservation {
   const source = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
   let value: unknown
-  try {
-    value = JSON.parse(source)
-  } catch {
-    throw new Error('Vision sidecar returned invalid JSON; visual inspection failed.')
-  }
+  try { value = JSON.parse(source) } catch { throw new Error('Vision sidecar returned invalid JSON; visual inspection failed.') }
   const candidate = value as Partial<VisionSidecarObservation>
   if (typeof candidate.summary !== 'string' || !candidate.summary.trim()) throw new Error('Vision sidecar returned no reliable summary.')
   if (!Array.isArray(candidate.frames) || !candidate.frames.length) throw new Error('Vision sidecar returned no frame observations.')
-  for (const frame of candidate.frames) {
-    if (!frame || typeof frame.timestamp !== 'string' || !frame.timestamp.trim() || typeof frame.description !== 'string' || !frame.description.trim()) {
-      throw new Error('Vision sidecar returned an incomplete frame observation.')
-    }
-  }
-  return {
-    summary: candidate.summary.trim(),
-    frames: candidate.frames.map((frame) => ({ timestamp: frame.timestamp.trim(), description: frame.description.trim(), ...(frame.editUse?.trim() ? { editUse: frame.editUse.trim() } : {}) })),
-    uncertainty: Array.isArray(candidate.uncertainty) ? candidate.uncertainty.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()) : [],
-  }
+  for (const frame of candidate.frames) if (!frame || typeof frame.timestamp !== 'string' || !frame.timestamp.trim() || typeof frame.description !== 'string' || !frame.description.trim()) throw new Error('Vision sidecar returned an incomplete frame observation.')
+  return { summary: candidate.summary.trim(), frames: candidate.frames.map((frame) => ({ timestamp: frame.timestamp.trim(), description: frame.description.trim(), ...(frame.editUse?.trim() ? { editUse: frame.editUse.trim() } : {}) })), uncertainty: Array.isArray(candidate.uncertainty) ? candidate.uncertainty.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()) : [] }
 }
 
 export function sidecarToolText(toolText: string, observation: VisionSidecarObservation) {
