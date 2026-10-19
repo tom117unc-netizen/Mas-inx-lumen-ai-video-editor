@@ -26,11 +26,11 @@
 
 ## Review Focus
 
-- **Source file replaced at the same path:** a new fingerprint must make an old transcript/observation unreachable for the replacement without deleting historical rows that may still be useful to another source identity.
-- **Missing/offline source:** transcript writes must fail clearly when the bank cannot resolve a current fingerprint; existing cached analysis may still be queried only by a currently registered matching source.
-- **Very long narration/episode transcript:** range queries must return only requested nearby words/phrases and set `truncated: true` when budgets are exhausted.
-- **Provider/model change:** a newer transcription run may coexist with old analysis, but the current lookup must select the newest compatible record deterministically rather than merge incompatible timings.
-- **Save As / restart:** transcript and observation records must survive the existing checkpointed database copy and reopen exactly as foundation data does.
+- **Source file replaced at the same path:** a new fingerprint must make old transcript/observation data unreachable for the replacement while leaving historical rows harmlessly keyed to the old identity.
+- **Missing/offline source:** analysis writes fail clearly when no current fingerprint can be resolved; reads never fall back to path-only identity.
+- **Very long narration/episode transcript:** range queries return only requested nearby words/phrases and set `truncated: true` when budgets are exhausted.
+- **Provider/model change:** multiple transcription runs may coexist, but lookup selects the newest compatible record deterministically instead of merging incompatible timings.
+- **Save As / restart:** transcript and observation records survive the existing checkpointed database copy and reopen exactly as foundation data does.
 
 ---
 
@@ -38,22 +38,22 @@
 
 **Files:**
 - Create: `Lumen-Fixed/shared/context-bank-analysis.ts`
+- Create: `Lumen-Fixed/shared/context-bank-analysis.test.ts`
 - Modify: `Lumen-Fixed/shared/app.ts`
 - Modify: `Lumen-Fixed/electron/preload.ts`
-- Test: `Lumen-Fixed/shared/context-bank-analysis.test.ts`
 
 **Interfaces:**
 - Produces `ContextBankTranscriptWord = { start: number; end: number; text: string }`.
 - Produces `ContextBankTranscriptSegment = { start: number; end: number; text: string }`.
 - Produces `ContextBankTranscriptWriteRequest` with `projectPath`, `projectId`, `assetId`, `provider`, `model`, optional `language`, `analysisVersion`, `words`, `segments`, and `createdAt`.
-- Produces `ContextBankTranscriptQuery` with project/source identity, optional source-time range, and `maxWords`, `maxSegments`, `maxCharacters` budgets.
-- Produces `ContextBankTranscriptResult` with fingerprint, provenance, bounded words/segments, `truncated`, and warnings.
-- Produces `ContextBankObservationInput`, `ContextBankObservationQuery`, `ContextBankObservationResult` for source-time facts with `kind`, `start`, `end`, `text`, optional `confidence`, `provenance`, `analysisVersion`, and timestamps.
+- Produces `ContextBankTranscriptQuery` with `projectPath`, `projectId`, `assetId`, optional `startSeconds`/`endSeconds`, and `maxWords`, `maxSegments`, `maxCharacters` budgets.
+- Produces `ContextBankTranscriptResult` with current source fingerprint, provider/model/version metadata, bounded words/segments, `truncated`, and warnings.
+- Produces `ContextBankObservationInput`, `ContextBankObservationWriteRequest`, `ContextBankObservationQuery`, and `ContextBankObservationResult` for source-time facts with `kind`, `start`, `end`, `text`, optional `confidence`, primitive provenance, `analysisVersion`, and timestamps.
 - Extends `ContextBankAPI` with `putTranscript`, `getTranscript`, `putObservations`, and `getObservations`; no raw SQL/blob API.
 
 - [ ] **Step 1: Write failing contract tests**
 
-Add tests named `accepts monotonic finite transcript timing`, `rejects negative or reversed source ranges`, and `caps serialized observation metadata to primitive JSON`. Pin `analysisVersion` as a non-empty string and transcript text as finite bounded strings rather than arbitrary objects.
+Add tests named `accepts monotonic finite transcript timing`, `rejects negative or reversed source ranges`, and `rejects nested or unbounded observation provenance`. Pin `analysisVersion` as a non-empty string, confidence to `0..1`, and transcript/observation text to explicit maximum lengths.
 
 - [ ] **Step 2: Run the contract tests and typecheck before preload wiring**
 
@@ -78,48 +78,54 @@ git add Lumen-Fixed/shared/context-bank-analysis.ts Lumen-Fixed/shared/context-b
 git commit -m "feat: define reusable Context Bank analysis contracts"
 ```
 
-### Task 2: Migrate the Context Bank to schema v2 with transcript and observation storage
+### Task 2: Migrate the Context Bank to schema v2 and persist source transcripts
 
 **Files:**
 - Modify: `Lumen-Fixed/electron/context-bank.ts`
 - Modify: `Lumen-Fixed/electron/context-bank.test.ts`
 - Create: `Lumen-Fixed/electron/context-bank-analysis.test.ts`
+- Modify: `Lumen-Fixed/electron/context-bank-copy.test.ts`
+- Modify: `Lumen-Fixed/electron/app-ipc.ts`
 
 **Interfaces:**
 - Produces schema version `2` with `source_transcripts` and `source_observations` tables.
-- Produces store methods `putTranscript`, `getTranscript`, `putObservations`, and `getObservations` matching Task 1 contracts.
+- Produces store methods `putTranscript(request: ContextBankTranscriptWriteRequest)` and `getTranscript(query: ContextBankTranscriptQuery)`.
 - `source_transcripts` stores one gzip payload per transcription run and metadata needed for deterministic selection.
-- `source_observations` stores indexed source-time rows keyed by fingerprint plus observation ID.
+- Transcript IPC handlers resolve through the trusted app IPC boundary; the renderer never supplies SQL or an authoritative fingerprint.
 
-- [ ] **Step 1: Write migration and persistence RED tests**
+- [ ] **Step 1: Write migration and transcript persistence RED tests**
 
-Cover: a fixture database at schema v1 opens and migrates to v2 without losing assets/clips/edit events; a transcript survives close/reopen; observations survive close/reopen; two project IDs remain isolated; gzip payload round-trips exactly.
+Cover: a fixture database at schema v1 opens and migrates to v2 without losing assets/clips/edit events; a transcript survives close/reopen; two project IDs remain isolated; gzip payload round-trips exactly; a transcript written before Save As exists in the copied bank after checkpointed copy/reopen.
 
 - [ ] **Step 2: Run the focused tests**
 
-Run: `npx vitest run electron/context-bank.test.ts electron/context-bank-analysis.test.ts`
+Run: `npx vitest run electron/context-bank.test.ts electron/context-bank-analysis.test.ts electron/context-bank-copy.test.ts`
 
-Expected: FAIL because schema v2 and analysis store methods do not exist.
+Expected: FAIL because schema v2 and transcript store methods do not exist.
 
 - [ ] **Step 3: Implement ordered schema migration and individually compressed transcript payloads**
 
-Add a `migrateSchema()` path rather than blindly overwriting `schema_version`. `source_transcripts` must include fingerprint, asset ID at write time, provider, model, language, analysis version, created-at time and gzip JSON payload. Add indexes for fingerprint and created-at. `source_observations` must index `(fingerprint, start_seconds, end_seconds)` and `kind`.
+Add a `migrateSchema()` path rather than blindly overwriting `schema_version`. `source_transcripts` includes fingerprint, asset ID at write time, provider, model, language, analysis version, created-at time and gzip JSON payload. Add indexes for fingerprint and created-at. Create the `source_observations` table now so schema v2 is complete, but leave its behavior to Task 5.
 
-- [ ] **Step 4: Resolve writes through the current `source_assets` fingerprint**
+- [ ] **Step 4: Resolve transcript writes through the current `source_assets` fingerprint**
 
-Reject transcript/observation writes when `assetId` is not currently registered or has no fingerprint. Never accept a renderer-supplied fingerprint as authoritative.
+Reject writes when `assetId` is not currently registered or has no fingerprint. Never accept a renderer-supplied fingerprint as authoritative. Store old runs under their old fingerprints rather than mutating them when a source later changes.
 
-- [ ] **Step 5: Run focused tests and Node typecheck**
+- [ ] **Step 5: Add trusted transcript IPC handlers**
 
-Run: `npx vitest run electron/context-bank.test.ts electron/context-bank-analysis.test.ts && npx tsc -p tsconfig.node.json`
+Register `putTranscript`/`getTranscript` app handlers with the same trusted-sender pattern as the foundation Context Bank API and close the per-call store in `finally`.
+
+- [ ] **Step 6: Run focused tests and Node typecheck**
+
+Run: `npx vitest run electron/context-bank.test.ts electron/context-bank-analysis.test.ts electron/context-bank-copy.test.ts && npx tsc -p tsconfig.node.json`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add Lumen-Fixed/electron/context-bank.ts Lumen-Fixed/electron/context-bank.test.ts Lumen-Fixed/electron/context-bank-analysis.test.ts
-git commit -m "feat: persist reusable source analysis in Context Bank"
+git add Lumen-Fixed/electron/context-bank.ts Lumen-Fixed/electron/context-bank.test.ts Lumen-Fixed/electron/context-bank-analysis.test.ts Lumen-Fixed/electron/context-bank-copy.test.ts Lumen-Fixed/electron/app-ipc.ts
+git commit -m "feat: persist reusable source transcripts"
 ```
 
 ### Task 3: Make transcript retrieval source-range-aware and budgeted
@@ -130,13 +136,13 @@ git commit -m "feat: persist reusable source analysis in Context Bank"
 
 **Interfaces:**
 - `getTranscript(query: ContextBankTranscriptQuery): ContextBankTranscriptResult`.
-- Selects the newest deterministic compatible transcript for the asset's current fingerprint.
+- Selects the newest compatible transcript for the asset's current fingerprint, ordered by `createdAt DESC` with a stable record-ID tie-break.
 - Returns only words/segments overlapping `[startSeconds, endSeconds)` when supplied.
 - Enforces caller budgets after decompression and sets `truncated: true` instead of returning an unbounded payload.
 
 - [ ] **Step 1: Add failing retrieval tests**
 
-Assert a 10,000-word fixture queried around seconds 120–125 returns only overlapping words/segments; `maxWords`, `maxSegments`, and `maxCharacters` all independently cause deterministic truncation; a replacement fingerprint makes the old transcript unavailable; moving a timeline clip does not.
+Assert a 10,000-word fixture queried around seconds 120–125 returns only overlapping words/segments; `maxWords`, `maxSegments`, and `maxCharacters` independently cause deterministic truncation; a replacement fingerprint makes the old transcript unavailable; a timeline-only clip move leaves it available; two runs with the same timestamp resolve with the stable tie-break.
 
 - [ ] **Step 2: Run the focused test**
 
@@ -146,7 +152,7 @@ Expected: FAIL on range filtering/budget behavior.
 
 - [ ] **Step 3: Implement range filtering and deterministic budget reduction**
 
-Decompress only the selected source transcript record. Sort by source start/end and original index. Apply item limits before the character budget; if the serialized response still exceeds the character budget, remove data from the end while retaining provenance and warnings.
+Decompress only the selected source transcript record. Sort words/segments by source start/end and original index. Apply item limits before the character budget; if the serialized result still exceeds the character budget, remove data from the end while retaining provenance and warnings.
 
 - [ ] **Step 4: Run focused tests**
 
@@ -161,50 +167,55 @@ git add Lumen-Fixed/electron/context-bank.ts Lumen-Fixed/electron/context-bank-a
 git commit -m "feat: add bounded source transcript retrieval"
 ```
 
-### Task 4: Preserve ElevenLabs Scribe word timings and provenance
+### Task 4: Preserve ElevenLabs Scribe word timings and write them once to the bank
 
 **Files:**
 - Modify: `Lumen-Fixed/shared/integrations.ts`
 - Modify: `Lumen-Fixed/electron/integrations/elevenlabs.ts`
-- Modify: `Lumen-Fixed/electron/integrations/elevenlabs.test.ts` (create if absent)
-- Modify: `Lumen-Fixed/src/integrations/store.ts`
+- Create: `Lumen-Fixed/electron/integrations/elevenlabs.test.ts` if absent
+- Create: `Lumen-Fixed/src/project/context-bank-analysis.ts`
+- Create: `Lumen-Fixed/src/project/context-bank-analysis.test.ts`
 - Modify: `Lumen-Fixed/src/project/transcribe.ts`
-- Test: `Lumen-Fixed/src/project/transcribe-context-bank.test.ts`
 
 **Interfaces:**
 - Extends transcription jobs with optional detailed word timings and transcription metadata without changing existing `Job.transcript` phrase semantics.
 - `Job.transcriptWords?: ContextBankTranscriptWord[]`.
-- `Job.transcriptMeta?: { provider: 'elevenlabs'; model: 'scribe_v2'; language?: string; analysisVersion: string }` for Scribe jobs.
-- Successful `transcribeMedia(assetId, ...)` continues to return `TranscriptSegment[]` and populate `Asset.transcript`, while also writing detailed analysis to the Context Bank when a saved project and detailed data are available.
+- `Job.transcriptMeta?: { provider: 'elevenlabs'; model: 'scribe_v2'; language?: string; analysisVersion: 'scribe_v2-word-v1' }` for Scribe jobs.
+- Produces `persistTranscriptAnalysis(assetId: string, detail: ContextBankTranscriptDetail): Promise<void>` in `src/project/context-bank-analysis.ts`; it skips unsaved/browser projects, awaits `flushContextBankWrites()`, then calls `desktop.contextBank.putTranscript`.
+- `transcribeMedia(assetId, ...)` keeps its current return type and `Asset.transcript` behavior.
 
 - [ ] **Step 1: Write ElevenLabs shaping RED tests**
 
-Given a Scribe response with word timestamps, assert the finished job retains the raw normalized words, still creates the same caption-sized phrase transcript, records `scribe_v2`, and records the returned language code.
+Given a Scribe response with word timestamps, assert the finished job retains normalized raw words, still produces the existing caption-sized phrase transcript, records model `scribe_v2`, records the returned language code, and pins `analysisVersion` to `scribe_v2-word-v1`.
 
-- [ ] **Step 2: Write renderer persistence RED tests**
+- [ ] **Step 2: Write renderer persistence helper RED tests**
 
-Mock a completed ElevenLabs transcription and assert `Asset.transcript` remains phrase-level for existing features while `contextBank.putTranscript` receives word timings, provider/model/language/version and the matching asset ID exactly once. Assert an unsaved project skips only the bank write, not the project transcript.
+Assert `persistTranscriptAnalysis` does nothing for an unsaved project, waits for the Context Bank write barrier before a saved-project write, sends the current project path/ID and asset ID, and converts a bank failure into a logged warning rather than an editor failure.
 
-- [ ] **Step 3: Run the focused tests**
+- [ ] **Step 3: Write `transcribeMedia` RED coverage**
 
-Run: `npx vitest run electron/integrations/elevenlabs.test.ts src/project/transcribe-context-bank.test.ts`
+Mock a completed ElevenLabs job and assert the existing phrase transcript remains available to captions/pause removal while the detailed word record is persisted exactly once. Assert ordinary import does not call this helper.
 
-Expected: FAIL because detailed transcript metadata is currently discarded.
+- [ ] **Step 4: Run the focused tests**
 
-- [ ] **Step 4: Retain detailed Scribe data and persist it after successful transcription**
+Run: `npx vitest run electron/integrations/elevenlabs.test.ts src/project/context-bank-analysis.test.ts`
 
-Do not trigger transcription from import. Do not make Context Bank persistence part of the editor's dirty flag. A Context Bank write failure must warn/log but must not discard a valid completed project transcript.
+Expected: FAIL because detailed Scribe metadata is currently discarded and the persistence helper does not exist.
 
-- [ ] **Step 5: Run focused tests plus existing transcription/integration tests**
+- [ ] **Step 5: Retain detailed Scribe data and persist it after successful ElevenLabs transcription**
 
-Run: `npx vitest run electron/integrations/elevenlabs.test.ts src/project/transcribe-context-bank.test.ts src/project/analysis-actions.test.ts`
+Keep the existing `transcribeAsset`/job flow intact. The Context Bank write is supplementary: it must not alter the project dirty flag, duplicate the `Asset.transcript` dispatch, or turn a successful transcription into a failure when cache persistence fails.
+
+- [ ] **Step 6: Run focused tests plus existing transcription/integration tests**
+
+Run: `npx vitest run electron/integrations/elevenlabs.test.ts src/project/context-bank-analysis.test.ts src/project/analysis-actions.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add Lumen-Fixed/shared/integrations.ts Lumen-Fixed/electron/integrations/elevenlabs.ts Lumen-Fixed/electron/integrations/elevenlabs.test.ts Lumen-Fixed/src/integrations/store.ts Lumen-Fixed/src/project/transcribe.ts Lumen-Fixed/src/project/transcribe-context-bank.test.ts
+git add Lumen-Fixed/shared/integrations.ts Lumen-Fixed/electron/integrations/elevenlabs.ts Lumen-Fixed/electron/integrations/elevenlabs.test.ts Lumen-Fixed/src/project/context-bank-analysis.ts Lumen-Fixed/src/project/context-bank-analysis.test.ts Lumen-Fixed/src/project/transcribe.ts
 git commit -m "feat: retain reusable ElevenLabs word transcripts"
 ```
 
@@ -213,37 +224,42 @@ git commit -m "feat: retain reusable ElevenLabs word transcripts"
 **Files:**
 - Modify: `Lumen-Fixed/electron/context-bank.ts`
 - Modify: `Lumen-Fixed/electron/context-bank-analysis.test.ts`
+- Modify: `Lumen-Fixed/electron/context-bank-copy.test.ts`
 - Modify: `Lumen-Fixed/electron/app-ipc.ts`
 
 **Interfaces:**
-- `putObservations(request): ContextBankObservationResult` performs idempotent upsert by observation ID after resolving the current fingerprint.
-- `getObservations(query): ContextBankObservationResult` filters by current fingerprint, optional source-time range/kind, and strict item/character budgets.
+- `putObservations(request: ContextBankObservationWriteRequest): ContextBankObservationResult` performs idempotent upsert by observation ID after resolving the current fingerprint.
+- `getObservations(query: ContextBankObservationQuery): ContextBankObservationResult` filters by current fingerprint, optional source-time range/kind, and strict item/character budgets.
 - Observation provenance is explicit (`producer`, optional `model`, optional `source`, `createdAt`) and confidence, when present, is constrained to `0..1`.
 
 - [ ] **Step 1: Add failing observation tests**
 
-Cover overlapping-range retrieval, kind filtering, idempotent repeated write, changed fingerprint isolation, confidence validation, deterministic ordering, and item/character truncation.
+Cover overlapping-range retrieval, kind filtering, idempotent repeated write, changed-fingerprint isolation, confidence validation, deterministic ordering, item/character truncation, close/reopen persistence, and Save As preservation.
 
-- [ ] **Step 2: Run the focused test**
+- [ ] **Step 2: Run the focused tests**
 
-Run: `npx vitest run electron/context-bank-analysis.test.ts`
+Run: `npx vitest run electron/context-bank-analysis.test.ts electron/context-bank-copy.test.ts`
 
 Expected: FAIL on observation persistence/retrieval.
 
-- [ ] **Step 3: Implement observation store methods and trusted IPC handlers**
+- [ ] **Step 3: Implement observation store methods**
 
-Keep observations compact. Store text plus small primitive provenance metadata; do not permit arbitrary binary data, frame images, or nested unbounded JSON through this API.
+Resolve each write against the current `source_assets` fingerprint. Store compact text plus primitive provenance metadata; do not permit arbitrary binary data, frame images, or nested unbounded JSON through this API.
 
-- [ ] **Step 4: Run focused tests and Node typecheck**
+- [ ] **Step 4: Add trusted observation IPC handlers**
 
-Run: `npx vitest run electron/context-bank-analysis.test.ts && npx tsc -p tsconfig.node.json`
+Register `putObservations`/`getObservations` behind the same trusted-sender boundary and per-call store lifecycle as transcript operations.
+
+- [ ] **Step 5: Run focused tests and Node typecheck**
+
+Run: `npx vitest run electron/context-bank-analysis.test.ts electron/context-bank-copy.test.ts && npx tsc -p tsconfig.node.json`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add Lumen-Fixed/electron/context-bank.ts Lumen-Fixed/electron/context-bank-analysis.test.ts Lumen-Fixed/electron/app-ipc.ts
+git add Lumen-Fixed/electron/context-bank.ts Lumen-Fixed/electron/context-bank-analysis.test.ts Lumen-Fixed/electron/context-bank-copy.test.ts Lumen-Fixed/electron/app-ipc.ts
 git commit -m "feat: add reusable source observations"
 ```
 
@@ -258,12 +274,12 @@ git commit -m "feat: add reusable source observations"
 **Interfaces:**
 - Produces `get_source_transcript` AI tool: requires `asset_id` and `purpose`; optional source-time range; hard caps returned words/segments/characters.
 - Produces `get_source_observations` AI tool: requires `asset_id` and `purpose`; optional range/kind; hard item/character caps.
-- Produces `record_source_observation` AI tool for a single compact observation with explicit range, kind, text, provenance source and optional confidence.
+- Produces `record_source_observation` AI tool for one compact observation with explicit source range, kind, text, provenance source and optional confidence.
 - These tools read/write only the Context Bank; they do not automatically invoke transcription, vision, web research, or media analysis.
 
 - [ ] **Step 1: Write registry and bounded-argument RED tests**
 
-Assert all three tools are present exactly once, reject unsaved projects, reject reversed ranges, clamp oversized budgets, and never expose `clear` or arbitrary fingerprint/SQL fields.
+Assert all three tools are present exactly once, reject unsaved projects, reject reversed ranges, clamp oversized budgets, and never expose `clear`, arbitrary fingerprints, SQL, or raw compressed payloads.
 
 - [ ] **Step 2: Run the focused tests**
 
@@ -273,7 +289,7 @@ Expected: FAIL because the analysis tools are not registered.
 
 - [ ] **Step 3: Implement the tools using the typed Context Bank API**
 
-Before reads, await `flushContextBankWrites()` just as `query_context_bank` does. Do not include full project state in responses. Observation writes must use current project path/ID and the supplied asset ID; the main process resolves the fingerprint.
+Before reads and observation writes, await `flushContextBankWrites()` so asset/fingerprint registration is current. Do not include full project state in responses. The main process resolves the fingerprint from the supplied asset ID.
 
 - [ ] **Step 4: Run focused tests and app typecheck**
 
@@ -288,10 +304,10 @@ git add Lumen-Fixed/src/integrations/tools/context-bank-analysis.ts Lumen-Fixed/
 git commit -m "feat: expose reusable source analysis tools"
 ```
 
-### Task 7: Verify persistence, invalidation and non-analysis-on-import end to end
+### Task 7: Verify persistence, invalidation and no automatic episode transcription
 
 **Files:**
-- Modify tests only where needed; do not add production behavior for this task.
+- Modify tests only where verification finds a gap; do not add unrelated production behavior in this task.
 
 **Interfaces:**
 - Verifies Tasks 1–6 as one reusable-analysis milestone.
@@ -306,8 +322,9 @@ npx vitest run \
   shared/context-bank-analysis.test.ts \
   electron/context-bank.test.ts \
   electron/context-bank-analysis.test.ts \
+  electron/context-bank-copy.test.ts \
   electron/integrations/elevenlabs.test.ts \
-  src/project/transcribe-context-bank.test.ts \
+  src/project/context-bank-analysis.test.ts \
   src/integrations/tools/context-bank-analysis.test.ts \
   src/integrations/tools/anime-review.test.ts
 ```
@@ -320,9 +337,9 @@ Run: `npm test && npm run typecheck`
 
 Expected: PASS with no skipped Context Bank analysis tests.
 
-- [ ] **Step 3: Audit import behavior**
+- [ ] **Step 3: Pin import behavior**
 
-Verify with tests or code inspection that ordinary media import only registers/probes assets and does not call `transcribeMedia`, ElevenLabs Scribe, or any source-observation producer merely because twelve episodes were imported.
+Add or reuse a media-import test proving ordinary import/probe does not call `transcribeMedia`, ElevenLabs Scribe, `putTranscript`, or any source-observation producer merely because a batch of episode files was imported.
 
 - [ ] **Step 4: Perform the Windows D-drive round-trip when a real desktop checkout is available**
 
