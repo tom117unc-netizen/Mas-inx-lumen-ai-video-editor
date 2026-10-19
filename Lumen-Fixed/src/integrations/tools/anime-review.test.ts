@@ -29,7 +29,7 @@ describe('ANIME_REVIEW_TOOLS', () => {
   })
 
   it('does not expose destructive or low-level Context Bank capabilities to the AI', () => {
-    const names = ANIME_REVIEW_TOOLS.map(tool => tool.name.join?.('') ?? tool.name)
+    const names = ANIME_REVIEW_TOOLS.map(tool => tool.name)
     expect(names).not.toEqual(expect.arrayContaining(['clear_context_bank', 'execute_context_sql', 'set_source_fingerprint']))
   })
 })
