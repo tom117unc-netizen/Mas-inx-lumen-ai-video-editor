@@ -191,6 +191,18 @@ describe('Context Bank show research', () => {
     try {
       store.replaceResearchSeed(seed(projectPath))
       store.putResearchPrior({ projectPath, projectId: 'project-1', prior: prior() })
+      store.putResearchPrior({
+        projectPath,
+        projectId: 'project-1',
+        prior: {
+          ...prior(),
+          id: 'prior:staircase-alt',
+          query: 'staircase episode',
+          text: 'Episode 2 is another coarse research prior for the staircase.',
+          confidence: 0.7,
+          provenance: { ...prior().provenance, createdAt: 1_700_000_000_200 },
+        },
+      })
       const result = store.searchResearch({ projectPath, projectId: 'project-1', query: 'staircase episode', maxItems: 1, maxCharacters: 500 })
       expect(result.priors.length + result.chunks.length).toBeLessThanOrEqual(1)
       expect(JSON.stringify(result).length).toBeLessThanOrEqual(500)
