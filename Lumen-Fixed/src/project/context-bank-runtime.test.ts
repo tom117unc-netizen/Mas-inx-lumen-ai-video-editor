@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createEmptyProject } from '@/editor/new-project'
-import { contextBankPathAction, runAnimeResearchAfterContextBankSync } from './context-bank-runtime'
+import { contextBankPathAction, recordResolvedAnimeResearchIdentity, runAnimeResearchAfterContextBankSync } from './context-bank-runtime'
 
 describe('contextBankPathAction', () => {
   it('copies only a Save As transition for the same loaded project', () => {
@@ -43,5 +43,34 @@ describe('anime research runtime ordering', () => {
 
     expect(reconcile).toHaveBeenCalledTimes(1)
     expect(seed).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolved anime identity persistence', () => {
+  it('records a confirmed ready identity against the exact project/query', () => {
+    const project = createEmptyProject('Frieren', {}, { version: 1, showQuery: 'Frieren' })
+    project.id = 'project-1'
+    const identity = {
+      source: 'anilist' as const,
+      externalId: '154587',
+      canonicalTitle: 'Frieren: Beyond Journey’s End',
+      year: 2023,
+      format: 'TV',
+      episodes: 28,
+    }
+    const record = vi.fn(() => true)
+
+    expect(recordResolvedAnimeResearchIdentity(project, { status: 'ready', identity }, record)).toBe(true)
+    expect(record).toHaveBeenCalledWith('project-1', 'Frieren', identity)
+  })
+
+  it('does not record ambiguous, failed, or identity-less research results', () => {
+    const project = createEmptyProject('Frieren', {}, { version: 1, showQuery: 'Frieren' })
+    const record = vi.fn(() => true)
+
+    expect(recordResolvedAnimeResearchIdentity(project, { status: 'ready' }, record)).toBe(false)
+    expect(recordResolvedAnimeResearchIdentity(project, { status: 'error', error: 'offline', retryable: true }, record)).toBe(false)
+    expect(recordResolvedAnimeResearchIdentity(project, { status: 'needs-confirmation', candidates: [] }, record)).toBe(false)
+    expect(record).not.toHaveBeenCalled()
   })
 })
