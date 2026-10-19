@@ -1,6 +1,19 @@
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { gunzipSync, gzipSync } from 'node:zlib'
+import type {
+  ContextBankObservationQuery,
+  ContextBankObservationResult,
+  ContextBankObservationWriteRequest,
+  ContextBankTranscriptQuery,
+  ContextBankTranscriptResult,
+  ContextBankTranscriptWriteRequest,
+  ContextBankTranscriptWord,
+  ContextBankTranscriptSegment,
+} from '../shared/context-bank-analysis'
+import { validateAnalysisVersion, validateTranscriptItems } from '../shared/context-bank-analysis'
 import type {
   ContextBankQuery,
   ContextBankQueryClip,
@@ -13,7 +26,7 @@ import type {
 } from '../shared/context-bank'
 import { fingerprintSourceFile } from './context-bank-fingerprint'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 function requireProjectPath(projectPath: string) {
@@ -49,6 +62,12 @@ function operationId(mutation: NonNullable<ContextBankSyncRequest['mutation']>) 
     : `${mutation.kind}:revision:${mutation.revision}`
 }
 
+function requireText(value: unknown, label: string, max = 256) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`)
+  if (value.length > max) throw new Error(`${label} is too long`)
+  return value
+}
+
 interface ExistingSource {
   asset_id: string
   path: string
@@ -57,9 +76,35 @@ interface ExistingSource {
   fingerprint: string | null
 }
 
+interface CurrentSource {
+  fingerprint: string | null
+  missing: number | bigint
+}
+
+interface TranscriptRow {
+  transcript_id: string
+  fingerprint: string
+  asset_id: string
+  provider: string
+  model: string
+  language: string | null
+  analysis_version: string
+  created_at: number | bigint
+  payload: Uint8Array
+}
+
+interface TranscriptPayload {
+  words: ContextBankTranscriptWord[]
+  segments: ContextBankTranscriptSegment[]
+}
+
 export interface ContextBankStore {
   sync(request: ContextBankSyncRequest): ContextBankStatus
   query(request: ContextBankQuery): ContextBankQueryResult
+  putTranscript(request: ContextBankTranscriptWriteRequest): ContextBankTranscriptResult
+  getTranscript(request: ContextBankTranscriptQuery): ContextBankTranscriptResult
+  putObservations(request: ContextBankObservationWriteRequest): ContextBankObservationResult
+  getObservations(request: ContextBankObservationQuery): ContextBankObservationResult
   status(): ContextBankStatus
   clear(): ContextBankStatus
   close(): void
@@ -77,6 +122,19 @@ class SqliteContextBankStore implements ContextBankStore {
     fs.mkdirSync(path.dirname(databasePath), { recursive: true })
     this.db = new DatabaseSync(databasePath)
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;')
+    this.createFoundationSchema()
+    const storedId = this.getMeta('project_id')
+    if (storedId && storedId !== projectId) {
+      this.db.close()
+      throw new Error(`Context Bank belongs to another project (${storedId})`)
+    }
+    this.migrateSchema()
+    this.setMeta('project_id', projectId, false)
+    this.setMeta('project_path', projectPath, false)
+    if (this.getMeta('last_revision') === undefined) this.setMeta('last_revision', '0', false)
+  }
+
+  private createFoundationSchema() {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
@@ -137,15 +195,63 @@ class SqliteContextBankStore implements ContextBankStore {
       CREATE INDEX IF NOT EXISTS idx_context_markers_range ON timeline_markers(sequence_id, frame);
       CREATE INDEX IF NOT EXISTS idx_context_edits_revision ON edit_events(revision DESC, at DESC);
     `)
-    this.setMeta('schema_version', String(SCHEMA_VERSION), false)
-    const storedId = this.getMeta('project_id')
-    if (storedId && storedId !== projectId) {
-      this.db.close()
-      throw new Error(`Context Bank belongs to another project (${storedId})`)
+  }
+
+  private migrateSchema() {
+    const raw = this.getMeta('schema_version')
+    let version = raw === undefined ? 0 : Number(raw)
+    if (!Number.isSafeInteger(version) || version < 0) throw new Error(`Invalid Context Bank schema version: ${raw}`)
+    if (version > SCHEMA_VERSION) throw new Error(`Context Bank schema ${version} is newer than this Lumen build supports`)
+    if (version === SCHEMA_VERSION) return
+
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (version < 1) {
+        this.setMeta('schema_version', '1', false)
+        version = 1
+      }
+      if (version < 2) {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS source_transcripts (
+            transcript_id TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            language TEXT,
+            analysis_version TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            payload BLOB NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_context_transcripts_fingerprint ON source_transcripts(fingerprint);
+          CREATE INDEX IF NOT EXISTS idx_context_transcripts_created ON source_transcripts(created_at DESC);
+          CREATE TABLE IF NOT EXISTS source_observations (
+            fingerprint TEXT NOT NULL,
+            observation_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            start_seconds REAL NOT NULL,
+            end_seconds REAL NOT NULL,
+            text TEXT NOT NULL,
+            confidence REAL,
+            producer TEXT NOT NULL,
+            model TEXT,
+            source TEXT,
+            created_at INTEGER NOT NULL,
+            analysis_version TEXT NOT NULL,
+            metadata_json TEXT,
+            PRIMARY KEY (fingerprint, observation_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_context_observations_range ON source_observations(fingerprint, start_seconds, end_seconds);
+          CREATE INDEX IF NOT EXISTS idx_context_observations_kind ON source_observations(fingerprint, kind);
+        `)
+        this.setMeta('schema_version', '2', false)
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      try { this.db.exec('ROLLBACK') } catch { /* already rolled back */ }
+      throw error
     }
-    this.setMeta('project_id', projectId, false)
-    this.setMeta('project_path', projectPath, false)
-    if (this.getMeta('last_revision') === undefined) this.setMeta('last_revision', '0', false)
   }
 
   private ensureOpen() {
@@ -160,6 +266,27 @@ class SqliteContextBankStore implements ContextBankStore {
   private setMeta(key: string, value: string, check = true) {
     if (check) this.ensureOpen()
     this.db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)').run(key, value)
+  }
+
+  private requireMatchingProject(projectPath: string, projectId: string, action: string) {
+    if (projectId !== this.projectId || !samePath(projectPath, this.projectPath)) throw new Error(`Context Bank ${action} project mismatch`)
+  }
+
+  private sourceForAsset(assetId: string): CurrentSource | undefined {
+    return this.db.prepare('SELECT fingerprint,missing FROM source_assets WHERE asset_id = ?').get(assetId) as CurrentSource | undefined
+  }
+
+  private emptyTranscript(assetId: string, fingerprint = '', warning?: string): ContextBankTranscriptResult {
+    return {
+      projectId: this.projectId,
+      assetId,
+      fingerprint,
+      found: false,
+      words: [],
+      segments: [],
+      truncated: false,
+      warnings: warning ? [warning] : [],
+    }
   }
 
   sync(request: ContextBankSyncRequest): ContextBankStatus {
@@ -237,6 +364,83 @@ class SqliteContextBankStore implements ContextBankStore {
       throw error
     }
     return this.status()
+  }
+
+  putTranscript(request: ContextBankTranscriptWriteRequest): ContextBankTranscriptResult {
+    this.ensureOpen()
+    this.requireMatchingProject(request.projectPath, request.projectId, 'transcript write')
+    requireText(request.assetId, 'Transcript asset id', 256)
+    requireText(request.provider, 'Transcript provider')
+    requireText(request.model, 'Transcript model')
+    if (request.language !== undefined) requireText(request.language, 'Transcript language', 64)
+    validateAnalysisVersion(request.analysisVersion)
+    if (!Array.isArray(request.words) || !Array.isArray(request.segments)) throw new Error('Transcript words and segments must be arrays')
+    validateTranscriptItems(request.words)
+    validateTranscriptItems(request.segments)
+    if (!Number.isFinite(request.createdAt) || request.createdAt < 0) throw new Error('Transcript createdAt must be a non-negative finite number')
+
+    const source = this.sourceForAsset(request.assetId)
+    if (!source || Number(source.missing) !== 0 || !source.fingerprint) throw new Error('Current source fingerprint is unavailable for this asset')
+    const payload: TranscriptPayload = { words: request.words, segments: request.segments }
+    const compressed = gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'))
+    this.db.prepare(`
+      INSERT INTO source_transcripts(transcript_id,fingerprint,asset_id,provider,model,language,analysis_version,created_at,payload)
+      VALUES (?,?,?,?,?,?,?,?,?)
+    `).run(
+      randomUUID(), source.fingerprint, request.assetId, request.provider, request.model, request.language ?? null,
+      request.analysisVersion, Math.floor(request.createdAt), compressed,
+    )
+    return {
+      projectId: this.projectId,
+      assetId: request.assetId,
+      fingerprint: source.fingerprint,
+      found: true,
+      provider: request.provider,
+      model: request.model,
+      ...(request.language ? { language: request.language } : {}),
+      analysisVersion: request.analysisVersion,
+      createdAt: Math.floor(request.createdAt),
+      words: request.words,
+      segments: request.segments,
+      truncated: false,
+      warnings: [],
+    }
+  }
+
+  getTranscript(request: ContextBankTranscriptQuery): ContextBankTranscriptResult {
+    this.ensureOpen()
+    this.requireMatchingProject(request.projectPath, request.projectId, 'transcript query')
+    const source = this.sourceForAsset(request.assetId)
+    if (!source?.fingerprint) return this.emptyTranscript(request.assetId, '', 'No current source fingerprint is available for this asset.')
+    const row = this.db.prepare(`
+      SELECT transcript_id,fingerprint,asset_id,provider,model,language,analysis_version,created_at,payload
+      FROM source_transcripts WHERE fingerprint = ? ORDER BY created_at DESC LIMIT 1
+    `).get(source.fingerprint) as TranscriptRow | undefined
+    if (!row) return this.emptyTranscript(request.assetId, source.fingerprint)
+    const payload = JSON.parse(gunzipSync(Buffer.from(row.payload)).toString('utf8')) as TranscriptPayload
+    return {
+      projectId: this.projectId,
+      assetId: request.assetId,
+      fingerprint: row.fingerprint,
+      found: true,
+      provider: row.provider,
+      model: row.model,
+      ...(row.language ? { language: row.language } : {}),
+      analysisVersion: row.analysis_version,
+      createdAt: Number(row.created_at),
+      words: payload.words,
+      segments: payload.segments,
+      truncated: false,
+      warnings: [],
+    }
+  }
+
+  putObservations(_request: ContextBankObservationWriteRequest): ContextBankObservationResult {
+    throw new Error('Context Bank source observations are not implemented yet')
+  }
+
+  getObservations(_request: ContextBankObservationQuery): ContextBankObservationResult {
+    throw new Error('Context Bank source observations are not implemented yet')
   }
 
   status(): ContextBankStatus {
@@ -335,7 +539,7 @@ class SqliteContextBankStore implements ContextBankStore {
     this.ensureOpen()
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      this.db.exec('DELETE FROM timeline_clips; DELETE FROM timeline_markers; DELETE FROM source_assets; DELETE FROM edit_events;')
+      this.db.exec('DELETE FROM timeline_clips; DELETE FROM timeline_markers; DELETE FROM source_assets; DELETE FROM edit_events; DELETE FROM source_transcripts; DELETE FROM source_observations;')
       this.setMeta('last_revision', '0')
       this.db.exec('COMMIT')
     } catch (error) {
