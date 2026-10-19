@@ -1,3 +1,11 @@
+export const CONTEXT_BANK_RESEARCH_IPC = {
+  status: 'lumen:context-bank:research-status',
+  setState: 'lumen:context-bank:research-state',
+  replaceSeed: 'lumen:context-bank:research-seed',
+  search: 'lumen:context-bank:research-search',
+  putPrior: 'lumen:context-bank:research-put-prior',
+} as const
+
 export const CONTEXT_BANK_RESEARCH_ID_MAX = 256
 export const CONTEXT_BANK_RESEARCH_TITLE_MAX = 500
 export const CONTEXT_BANK_RESEARCH_QUERY_MAX = 1_000
