@@ -2,6 +2,7 @@ import type {
   ContextBankObservationQuery,
   ContextBankObservationWriteRequest,
   ContextBankTranscriptQuery,
+  ContextBankTranscriptWriteRequest,
 } from '@shared/context-bank-analysis'
 import { getProject } from '@/editor/store'
 import { desktop } from '@/lib/platform'
@@ -23,6 +24,7 @@ export const MAX_SOURCE_OBSERVATION_CHARACTERS = 28_000
 
 const OBSERVATION_ANALYSIS_VERSION = 'ai-source-observation-v1'
 const OBSERVATION_PRODUCER = 'anime-review-ai'
+const PROJECT_TRANSCRIPT_BACKFILL_ANALYSIS_VERSION = 'asset-transcript-backfill-v1'
 
 function requiredText(args: ToolArgs, key: string, label: string, max: number) {
   const value = typeof args[key] === 'string' ? args[key].trim() : ''
@@ -113,6 +115,26 @@ export function makeSourceTranscriptQuery(args: ToolArgs, projectPath: string | 
   }
 }
 
+export function makeProjectTranscriptBackfill(
+  projectPath: string,
+  projectId: string,
+  assetId: string,
+  segments: readonly { start: number; end: number; text: string }[],
+  createdAt = Date.now(),
+): ContextBankTranscriptWriteRequest {
+  return {
+    projectPath,
+    projectId,
+    assetId,
+    provider: 'lumen-project',
+    model: 'asset-transcript',
+    analysisVersion: PROJECT_TRANSCRIPT_BACKFILL_ANALYSIS_VERSION,
+    words: [],
+    segments: segments.map(segment => ({ start: segment.start, end: segment.end, text: segment.text })),
+    createdAt,
+  }
+}
+
 export function makeSourceObservationQuery(args: ToolArgs, projectPath: string | null, projectId: string): ContextBankObservationQuery {
   const project = requireProject(projectPath, projectId)
   const assetId = requiredText(args, 'asset_id', 'Asset id', 256)
@@ -189,7 +211,7 @@ async function barrier() {
 export const CONTEXT_BANK_ANALYSIS_TOOLS: AgentTool[] = [
   {
     name: 'get_source_transcript',
-    description: 'Read a bounded source-time slice of a transcript Lumen has already cached for one imported asset. Use this for exact narration words/timings without retranscribing media. This never starts transcription or media analysis.',
+    description: 'Read a bounded source-time slice of a transcript Lumen has cached for one imported asset. If the Context Bank is missing an older project transcript that already exists on the asset, Lumen backfills those phrase segments first. This never starts transcription or media analysis.',
     inputSchema: obj({
       asset_id: str('Exact imported asset ID whose cached transcript should be read.'),
       purpose: str('The specific decision this transcript is for. Required so retrieval stays narrow.'),
@@ -203,6 +225,20 @@ export const CONTEXT_BANK_ANALYSIS_TOOLS: AgentTool[] = [
       const identity = currentIdentity()
       const request = makeSourceTranscriptQuery(args, identity.projectPath, identity.projectId)
       const app = await barrier()
+      ensureSameProject(identity)
+      const cached = await app.contextBank.getTranscript(request)
+      if (cached.found) return cached
+
+      const transcript = getProject().assets[request.assetId]?.transcript
+      if (!transcript?.length) return cached
+
+      ensureSameProject(identity)
+      await app.contextBank.putTranscript(makeProjectTranscriptBackfill(
+        request.projectPath,
+        request.projectId,
+        request.assetId,
+        transcript,
+      ))
       ensureSameProject(identity)
       return app.contextBank.getTranscript(request)
     },
