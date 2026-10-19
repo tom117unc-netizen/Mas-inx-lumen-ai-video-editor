@@ -6,6 +6,7 @@ export type AiEdit =
   | { op: 'move'; sequenceId: string; clipId: string; start: number; expectedStart?: number }
   | { op: 'trim'; sequenceId: string; clipId: string; start: number; duration: number; inPoint: number; expectedStart?: number }
   | { op: 'setText'; sequenceId: string; clipId: string; content: string }
+  | { op: 'setAsset'; sequenceId: string; clipId: string; assetId: string }
   | { op: 'setTransform'; sequenceId: string; clipId: string; transform: Partial<Clip['transform']> }
   | { op: 'setAudio'; sequenceId: string; clipId: string; audio: Partial<Clip['audio']> }
   | { op: 'setTrack'; sequenceId: string; trackId: string; changes: Partial<Pick<Track, 'muted' | 'hidden' | 'solo'>> }
@@ -53,6 +54,11 @@ export function applyAiPatch(original: Project, patch: AiPatch): PatchResult {
         if (clip.kind !== 'text' || !clip.text) throw new Error(`Clip ${clip.id} is not a text clip`)
         if (typeof edit.content !== 'string') throw new Error('Text content must be a string')
         clip.text.content = edit.content; break
+      case 'setAsset':
+        if (typeof edit.assetId !== 'string' || !edit.assetId) throw new Error('Asset ID required')
+        if (!project.assets[edit.assetId]) throw new Error(`Unknown asset: ${edit.assetId}`)
+        if (!clip.assetId) throw new Error(`Clip ${clip.id} does not reference a replaceable media asset`)
+        clip.assetId = edit.assetId; break
       case 'setTransform':
         if (!edit.transform || typeof edit.transform !== 'object' || Array.isArray(edit.transform)) throw new Error('Invalid transform')
         for (const [key, value] of Object.entries(edit.transform)) {
