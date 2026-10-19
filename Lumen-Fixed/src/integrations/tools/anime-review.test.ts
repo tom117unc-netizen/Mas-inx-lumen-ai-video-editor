@@ -9,6 +9,9 @@ const EXPECTED_TOOLS = [
   'get_source_transcript',
   'get_source_observations',
   'record_source_observation',
+  'get_show_research_status',
+  'search_show_research',
+  'record_research_prior',
 ]
 
 describe('ANIME_REVIEW_TOOLS', () => {
@@ -30,6 +33,12 @@ describe('ANIME_REVIEW_TOOLS', () => {
 
   it('does not expose destructive or low-level Context Bank capabilities to the AI', () => {
     const names = ANIME_REVIEW_TOOLS.map(tool => tool.name)
-    expect(names).not.toEqual(expect.arrayContaining(['clear_context_bank', 'execute_context_sql', 'set_source_fingerprint']))
+    expect(names).not.toEqual(expect.arrayContaining([
+      'clear_context_bank',
+      'execute_context_sql',
+      'set_source_fingerprint',
+      'set_show_identity',
+      'fetch_show_research_url',
+    ]))
   })
 })
