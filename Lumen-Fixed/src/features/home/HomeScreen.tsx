@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { Segmented } from '@/components/ui/segmented'
 import { Tip } from '@/components/ui/tooltip'
+import { animeReviewProjectFromTitle } from '@/editor/anime-review-project'
 import { CANVAS_PRESETS, FRAME_RATES, type CanvasPreset } from '@/editor/new-project'
 import { useEditor } from '@/editor/store'
 import { cn } from '@/lib/cn'
@@ -48,10 +49,14 @@ export function HomeScreen() {
   const currentName = useEditor((s) => s.project.name)
   const [preset, setPreset] = useState(CANVAS_PRESETS[0].id)
   const [fps, setFps] = useState('30')
+  const [showTitle, setShowTitle] = useState('')
   const [dragging, setDragging] = useState(false)
 
   const chosen = CANVAS_PRESETS.find((p) => p.id === preset)!
-  const create = (p: CanvasPreset = chosen) => void newProject({ width: p.width, height: p.height, fps: Number(fps) })
+  const create = (p: CanvasPreset = chosen) => {
+    const review = animeReviewProjectFromTitle(showTitle)
+    void newProject({ width: p.width, height: p.height, fps: Number(fps) }, review.name, review.animeReview)
+  }
 
   const onDrop = async (e: DragEvent) => {
     e.preventDefault()
@@ -60,7 +65,12 @@ export function HomeScreen() {
     if (!files.length) return
     const lumen = files.find((f) => f.name.toLowerCase().endsWith('.lumen'))
     if (lumen && desktop) return void openProject(desktop.files.pathForFile(lumen))
-    if (await newProject({ width: chosen.width, height: chosen.height, fps: Number(fps) })) await importDropped(files)
+    const review = animeReviewProjectFromTitle(showTitle)
+    if (await newProject(
+      { width: chosen.width, height: chosen.height, fps: Number(fps) },
+      review.name,
+      review.animeReview,
+    )) await importDropped(files)
   }
 
   return (
@@ -132,6 +142,23 @@ export function HomeScreen() {
             <span className="text-xs text-fg-3">Frame rate</span>
             <Segmented value={fps} onChange={setFps} options={FRAME_RATES.map((f) => ({ value: String(f), label: `${f}` }))} />
           </div>
+          <label className="mt-4 block">
+            <span className="flex items-baseline justify-between gap-3 text-xs text-fg-3">
+              <span>Anime / show</span>
+              <span className="text-2xs text-fg-4">Optional</span>
+            </span>
+            <input
+              type="text"
+              value={showTitle}
+              maxLength={300}
+              onChange={(e) => setShowTitle(e.target.value)}
+              placeholder="e.g. Frieren: Beyond Journey’s End"
+              className="mt-2 h-9 w-full rounded-lg border border-line bg-white/[0.025] px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-4 focus:border-accent/60 focus:bg-white/[0.04]"
+            />
+            <span className="mt-1.5 block text-2xs leading-relaxed text-fg-4">
+              Add a title for an anime-review project. Lumen will ask where to save it before project-local research begins.
+            </span>
+          </label>
           <div className="mt-6 flex gap-2">
             <Button variant="primary" size="lg" className="flex-1" onClick={() => create()} disabled={busy}>
               <FilePlus2 />
