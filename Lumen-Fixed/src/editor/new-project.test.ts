@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { normalizeAnimeReviewProject } from './anime-review-project'
 import { createEmptyProject } from './new-project'
 import { migrateProject } from './store'
 import type { Project } from './types'
@@ -48,9 +49,9 @@ describe('anime review project setup', () => {
     expect(migrateProject(old).animeReview).toBeUndefined()
   })
 
-  it('sanitizes malformed anime review state during migration', () => {
+  it('sanitizes malformed anime review state at the project load boundary', () => {
     const project = createEmptyProject('Review') as Project & { animeReview?: unknown }
     project.animeReview = { version: 99, showQuery: '   ' }
-    expect(migrateProject(project as Project).animeReview).toBeUndefined()
+    expect(normalizeAnimeReviewProject(project as Project).animeReview).toBeUndefined()
   })
 })
