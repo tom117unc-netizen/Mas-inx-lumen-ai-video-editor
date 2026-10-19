@@ -17,7 +17,7 @@ import {
 } from '@shared/context-bank-research'
 import { animeReviewSetupForExistingProject } from '@/editor/anime-review-project'
 import { getProject, useEditor } from '@/editor/store'
-import { desktop } from '@/lib/platform'
+import { desktop, integrations as desktopIntegrations } from '@/lib/platform'
 import { seedAnimeResearchForProject } from '@/project/anime-research'
 import { flushContextBankWrites, recordResolvedAnimeResearchIdentity } from '@/project/context-bank-runtime'
 import { useSession } from '@/project/session'
@@ -204,7 +204,13 @@ export const CONTEXT_BANK_RESEARCH_TOOLS: AgentTool[] = [
 
       await flushContextBankWrites()
       const project = getProject()
-      const research = await seedAnimeResearchForProject(project, projectPath)
+      const research = desktop?.contextBank && desktopIntegrations
+        ? await seedAnimeResearchForProject(project, projectPath, {
+            bank: desktop.contextBank,
+            integrations: desktopIntegrations,
+            allowRetry: true,
+          })
+        : await seedAnimeResearchForProject(project, projectPath)
       recordResolvedAnimeResearchIdentity(project, research)
       return {
         configured: true,
