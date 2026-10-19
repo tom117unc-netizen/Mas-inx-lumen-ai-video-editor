@@ -1,3 +1,12 @@
+import type {
+  ContextBankObservationQuery,
+  ContextBankObservationResult,
+  ContextBankObservationWriteRequest,
+  ContextBankTranscriptQuery,
+  ContextBankTranscriptResult,
+  ContextBankTranscriptWriteRequest,
+} from './context-bank-analysis'
+
 export const CONTEXT_BANK_MIRROR_FORMAT = 'lumen-context-mirror' as const
 export const CONTEXT_BANK_MIRROR_VERSION = 1 as const
 
@@ -166,6 +175,10 @@ export interface ContextBankQueryResult {
 export interface ContextBankAPI {
   sync(request: ContextBankSyncRequest): Promise<ContextBankStatus>
   query(request: ContextBankQuery): Promise<ContextBankQueryResult>
+  putTranscript(request: ContextBankTranscriptWriteRequest): Promise<ContextBankTranscriptResult>
+  getTranscript(query: ContextBankTranscriptQuery): Promise<ContextBankTranscriptResult>
+  putObservations(request: ContextBankObservationWriteRequest): Promise<ContextBankObservationResult>
+  getObservations(query: ContextBankObservationQuery): Promise<ContextBankObservationResult>
   status(projectPath: string, projectId: string): Promise<ContextBankStatus>
   copyForSaveAs(projectId: string, fromProjectPath: string, toProjectPath: string): Promise<void>
   clear(projectPath: string, projectId: string): Promise<void>
