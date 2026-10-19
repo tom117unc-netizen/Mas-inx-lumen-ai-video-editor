@@ -1,8 +1,8 @@
 /** Anime review AI tools: reliable IDs, nested timeline inventory and bounded project memory. */
 import { inspectTimelines, listTimelineMarkers } from '@/editor/anime-timeline-operations'
+import { PEAKS_PER_SECOND } from '@/editor/defaults'
 import { planMouthSync, planSpriteVersionReplacement } from '@/editor/anime-pngtuber-sync'
 import { getProject, useEditor } from '@/editor/store'
-import { PEAKS_PER_SECOND } from '@/engine/audio-engine'
 import { desktop } from '@/lib/platform'
 import { flushContextBankWrites } from '@/project/context-bank-runtime'
 import { useSession } from '@/project/session'
