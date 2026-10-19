@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detailedProviderError } from './agent'
+import { detailedProviderError } from './provider-error'
 
 describe('detailedProviderError', () => {
   it('includes status and provider response body instead of only Bad Request', () => {
@@ -25,5 +25,16 @@ describe('detailedProviderError', () => {
   it('does not duplicate an already detailed message', () => {
     const err = Object.assign(new Error('maximum context length is 131072 tokens'), { statusCode: 400 })
     expect(detailedProviderError(err)).toBe('400 maximum context length is 131072 tokens')
+  })
+
+  it('redacts obvious credentials from provider payloads', () => {
+    const err = Object.assign(new Error('Bad Request'), {
+      statusCode: 400,
+      data: { error: 'invalid image payload', api_key: 'do-not-show-this' },
+    })
+    const result = detailedProviderError(err)
+    expect(result).toContain('invalid image payload')
+    expect(result).not.toContain('do-not-show-this')
+    expect(result).toContain('[redacted]')
   })
 })
