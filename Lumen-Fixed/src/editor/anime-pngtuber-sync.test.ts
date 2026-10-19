@@ -25,15 +25,20 @@ describe('anime PNGTuber mouth planner', () => {
     ])
   })
   it('applies an approved sprite asset swap without changing unrelated clip properties', () => {
+    const fileSource = (name: string) => ({
+      type: 'file' as const, url: `file:///${name}.png`, path: `C:\\sprites\\${name}.png`,
+      mime: 'image/png', fileName: `${name}.png`, size: 1, mtime: 1,
+    })
     const project = {
-      id: 'project-1',
+      id: 'project-1', name: 'PNGTuber test', settings: { fps: 30 },
       clips: {
         clip1: { id: 'clip1', assetId: 'old', trackId: 'video-1', start: 42, duration: 90, opacity: 0.75 },
       },
-      assets: { old: { id: 'old' }, new: { id: 'new' } },
-      markers: [],
-      tracks: [{ id: 'video-1', kind: 'video', locked: false }],
-      sequences: {},
+      assets: {
+        old: { id: 'old', name: 'old.png', kind: 'image', duration: 0, source: fileSource('old'), addedAt: 1 },
+        new: { id: 'new', name: 'new.png', kind: 'image', duration: 0, source: fileSource('new'), addedAt: 1 },
+      },
+      markers: [], tracks: [{ id: 'video-1', kind: 'video', locked: false }], sequences: {},
     } as unknown as Project
     const patch = {
       format: 'lumen-ai-patch' as const,
