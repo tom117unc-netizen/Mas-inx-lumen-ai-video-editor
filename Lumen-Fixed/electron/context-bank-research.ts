@@ -270,14 +270,33 @@ function queryTokens(value: string) {
   return [...new Set(tokens)].slice(0, 24)
 }
 
-function ftsExpression(tokens: readonly string[]) {
-  return tokens.map(token => `"${token.replace(/"/g, '""')}"`).join(' AND ')
+function ftsExpression(tokens: readonly string[], operator: 'AND' | 'OR' = 'AND') {
+  return tokens.map(token => `"${token.replace(/"/g, '""')}"`).join(` ${operator} `)
 }
 
 function priorScore(prior: ContextBankResearchPrior, tokens: readonly string[]) {
   const haystack = normalizedEvidenceText(`${prior.query} ${prior.text}`)
   const hits = tokens.reduce((count, token) => count + (haystack.includes(token) ? 1 : 0), 0)
   return tokens.length ? hits / tokens.length : 0
+}
+
+function researchChunkRows(db: DatabaseSync, fts: string, limit: number) {
+  return db.prepare(`
+    SELECT c.chunk_id,c.source_id,c.ordinal,c.heading,c.text,c.episode_number,
+           s.url AS source_url,s.title AS source_title,s.site,
+           bm25(research_chunks_fts) AS rank
+    FROM research_chunks_fts
+    JOIN research_chunks c ON c.chunk_id = research_chunks_fts.chunk_id
+    JOIN research_sources s ON s.source_id = c.source_id
+    WHERE research_chunks_fts MATCH ?
+    ORDER BY rank ASC,c.source_id,c.ordinal,c.chunk_id
+    LIMIT ?
+  `).all(fts, limit) as unknown as Record<string, unknown>[]
+}
+
+function rowTokenHits(row: Record<string, unknown>, tokens: readonly string[]) {
+  const haystack = normalizedEvidenceText(`${row.heading ?? ''} ${row.text ?? ''}`)
+  return tokens.reduce((count, token) => count + (haystack.includes(token) ? 1 : 0), 0)
 }
 
 export function searchShowResearch(
@@ -305,34 +324,42 @@ export function searchShowResearch(
       .sort((a, b) => b.score - a.score || b.item.confidence - a.item.confidence || a.item.id.localeCompare(b.item.id))
       .map(entry => entry.item)
 
-    const fts = ftsExpression(tokens)
-    const rows = db.prepare(`
-      SELECT c.chunk_id,c.source_id,c.ordinal,c.heading,c.text,c.episode_number,
-             s.url AS source_url,s.title AS source_title,s.site,
-             bm25(research_chunks_fts) AS rank
-      FROM research_chunks_fts
-      JOIN research_chunks c ON c.chunk_id = research_chunks_fts.chunk_id
-      JOIN research_sources s ON s.source_id = c.source_id
-      WHERE research_chunks_fts MATCH ?
-      ORDER BY rank ASC,c.source_id,c.ordinal,c.chunk_id
-      LIMIT 100
-    `).all(fts) as unknown as Record<string, unknown>[]
+    let rows = researchChunkRows(db, ftsExpression(tokens), 100)
+    let relaxed = false
+    if (!rows.length && tokens.length > 1) {
+      const minimumHits = tokens.length >= 3 ? 2 : 1
+      rows = researchChunkRows(db, ftsExpression(tokens, 'OR'), 200)
+        .map(row => ({ row, hits: rowTokenHits(row, tokens) }))
+        .filter(entry => entry.hits >= minimumHits)
+        .sort((a, b) => (
+          b.hits - a.hits
+          || Number(a.row.rank ?? 0) - Number(b.row.rank ?? 0)
+          || String(a.row.source_id).localeCompare(String(b.row.source_id))
+          || Number(a.row.ordinal) - Number(b.row.ordinal)
+          || String(a.row.chunk_id).localeCompare(String(b.row.chunk_id))
+        ))
+        .map(entry => entry.row)
+      relaxed = rows.length > 0
+    }
 
     const preferredChunkIds = new Set(matchingPriors.map(prior => prior.evidence.chunkId))
     const matchingChunks: ContextBankResearchChunkHit[] = rows
       .filter(row => !preferredChunkIds.has(String(row.chunk_id)))
-      .map(row => ({
-        id: String(row.chunk_id),
-        sourceId: String(row.source_id),
-        ordinal: Number(row.ordinal),
-        ...(row.heading ? { heading: String(row.heading) } : {}),
-        text: String(row.text),
-        ...(row.episode_number === null || row.episode_number === undefined ? {} : { episodeNumber: Number(row.episode_number) }),
-        sourceUrl: String(row.source_url),
-        ...(row.source_title ? { sourceTitle: String(row.source_title) } : {}),
-        ...(row.site ? { site: String(row.site) } : {}),
-        score: 1 / (1 + Math.abs(Number(row.rank ?? 0))),
-      }))
+      .map(row => {
+        const coverage = tokens.length ? rowTokenHits(row, tokens) / tokens.length : 0
+        return {
+          id: String(row.chunk_id),
+          sourceId: String(row.source_id),
+          ordinal: Number(row.ordinal),
+          ...(row.heading ? { heading: String(row.heading) } : {}),
+          text: String(row.text),
+          ...(row.episode_number === null || row.episode_number === undefined ? {} : { episodeNumber: Number(row.episode_number) }),
+          sourceUrl: String(row.source_url),
+          ...(row.source_title ? { sourceTitle: String(row.source_title) } : {}),
+          ...(row.site ? { site: String(row.site) } : {}),
+          score: relaxed ? coverage : 1 / (1 + Math.abs(Number(row.rank ?? 0))),
+        }
+      })
 
     const allCount = matchingPriors.length + matchingChunks.length
     const priors = matchingPriors.slice(0, request.maxItems)
@@ -342,7 +369,7 @@ export function searchShowResearch(
       priors,
       chunks,
       truncated: allCount > priors.length + chunks.length,
-      warnings: [],
+      warnings: relaxed ? ['Research search relaxed because no chunk matched all query terms.'] : [],
     }
 
     while (JSON.stringify(result).length > request.maxCharacters && result.chunks.length) {
