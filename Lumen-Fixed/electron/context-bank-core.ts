@@ -25,8 +25,9 @@ import type {
   ContextBankSyncRequest,
 } from '../shared/context-bank'
 import { fingerprintSourceFile } from './context-bank-fingerprint'
+import { CONTEXT_BANK_RESEARCH_SCHEMA_SQL } from './context-bank-research'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 function requireProjectPath(projectPath: string) {
@@ -262,6 +263,16 @@ class SqliteContextBankStore implements ContextBankStore {
           CREATE INDEX IF NOT EXISTS idx_context_observations_kind ON source_observations(fingerprint, kind);
         `)
         this.setMeta('schema_version', '2', false)
+        version = 2
+      }
+      if (version < 3) {
+        try {
+          this.db.exec(CONTEXT_BANK_RESEARCH_SCHEMA_SQL)
+        } catch (error) {
+          throw new Error(`Context Bank schema v3 requires SQLite FTS5: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        this.setMeta('schema_version', '3', false)
+        version = 3
       }
       this.db.exec('COMMIT')
     } catch (error) {
