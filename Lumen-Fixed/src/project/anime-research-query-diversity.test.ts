@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ContextBankAPI } from '@shared/context-bank'
-import type { ContextBankResearchStatusResult } from '@shared/context-bank-research'
+import {
+  validateResearchSeedWriteRequest,
+  type ContextBankResearchStatusResult,
+} from '@shared/context-bank-research'
 import type { IntegrationsAPI } from '@shared/integrations'
 import { createEmptyProject } from '@/editor/new-project'
 import { seedAnimeResearchForProject } from './anime-research'
@@ -138,5 +141,46 @@ describe('anime research query diversity', () => {
     expect(request?.sources.some(source => source.url === 'https://episodes.example/guide')).toBe(true)
     expect(request?.chunks.some(chunk => chunk.episodeNumber === 2)).toBe(true)
     expect(request?.chunks.length).toBeLessThanOrEqual(256)
+  })
+
+  it('keeps a long episode-guide line as chunk text without exceeding the bounded heading limit', async () => {
+    const contextBank = bank()
+    vi.mocked(contextBank.replaceResearchSeed).mockImplementation(async request => {
+      validateResearchSeedWriteRequest(request)
+      return researchStatus({
+        state: request.state,
+        sourceCount: request.sources.length,
+        chunkCount: request.chunks.length,
+      })
+    })
+
+    const search = vi.fn(async (query: string) => query.includes('episode guide')
+      ? [{ title: 'Episode guide', url: 'https://episodes.example/long-guide', snippet: 'Episode 2 summary' }]
+      : [])
+    const longEpisodeLine = `Episode 2: ${'important scene details '.repeat(40)}`
+    expect(longEpisodeLine.length).toBeGreaterThan(500)
+
+    const read = vi.fn(async (url: string) => ({
+      url,
+      title: 'Episode guide',
+      site: 'episodes.example',
+      text: longEpisodeLine,
+      links: [],
+      images: [],
+    }))
+
+    const result = await seedAnimeResearchForProject(project(), projectPath, {
+      bank: contextBank,
+      integrations: api(search as IntegrationsAPI['web']['search'], read as IntegrationsAPI['web']['read']),
+      now: () => 12,
+    })
+
+    expect(result).toMatchObject({ status: 'ready' })
+    const request = vi.mocked(contextBank.replaceResearchSeed).mock.calls[0]?.[0]
+    const episodeChunk = request?.chunks.find(chunk => chunk.episodeNumber === 2)
+    expect(episodeChunk).toBeDefined()
+    expect(episodeChunk?.heading).toBe('Episode 2')
+    expect(episodeChunk?.text).toBe(longEpisodeLine.trim())
+    expect(episodeChunk?.text.length).toBeGreaterThan(500)
   })
 })
