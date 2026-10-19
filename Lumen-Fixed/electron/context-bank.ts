@@ -14,7 +14,7 @@ import {
   contextBankPath,
   copyContextBankForSaveAs,
   openContextBank as openCoreContextBank,
-  type ContextBankStore,
+  type ContextBankStore as CoreContextBankStore,
 } from './context-bank-core'
 import { getSourceObservations, putSourceObservations } from './context-bank-observations'
 import {
@@ -26,18 +26,15 @@ import {
   setShowResearchState,
 } from './context-bank-research'
 
-declare module './context-bank-core' {
-  interface ContextBankStore {
-    getResearchStatus(request: ContextBankResearchStatusRequest): ContextBankResearchStatusResult
-    setResearchState(request: ContextBankResearchStateWriteRequest): ContextBankResearchStatusResult
-    replaceResearchSeed(request: ContextBankResearchSeedWriteRequest): ContextBankResearchStatusResult
-    searchResearch(request: ContextBankResearchSearchRequest): ContextBankResearchSearchResult
-    putResearchPrior(request: ContextBankResearchPriorWriteRequest): ContextBankResearchPriorWriteResult
-  }
+export interface ContextBankStore extends CoreContextBankStore {
+  getResearchStatus(request: ContextBankResearchStatusRequest): ContextBankResearchStatusResult
+  setResearchState(request: ContextBankResearchStateWriteRequest): ContextBankResearchStatusResult
+  replaceResearchSeed(request: ContextBankResearchSeedWriteRequest): ContextBankResearchStatusResult
+  searchResearch(request: ContextBankResearchSearchRequest): ContextBankResearchSearchResult
+  putResearchPrior(request: ContextBankResearchPriorWriteRequest): ContextBankResearchPriorWriteResult
 }
 
 export { contextBankPath, copyContextBankForSaveAs }
-export type { ContextBankStore }
 
 /** Clears only Context Bank state. The canonical .lumen document and source media are untouched. */
 export function clearContextBank(projectPath: string, projectId: string) {
@@ -51,7 +48,7 @@ export function clearContextBank(projectPath: string, projectId: string) {
  * show-research methods around the core timeline/transcript store.
  */
 export function openContextBank(projectPath: string, projectId: string): ContextBankStore {
-  const store = openCoreContextBank(projectPath, projectId)
+  const store = openCoreContextBank(projectPath, projectId) as ContextBankStore
   const databasePath = contextBankPath(projectPath, projectId)
 
   store.putObservations = (request: ContextBankObservationWriteRequest): ContextBankObservationResult =>
