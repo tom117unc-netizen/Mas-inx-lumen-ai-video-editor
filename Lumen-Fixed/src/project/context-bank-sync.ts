@@ -29,6 +29,11 @@ export function createContextBankSynchronizer(
   // promise, while the queue catches that rejection before scheduling the next write.
   let tail: Promise<void> = Promise.resolve()
 
+  const preserveQueue = (run: Promise<void>) => {
+    tail = run.catch(error => { onError(error) })
+    return run
+  }
+
   const enqueue = (event?: CommittedEditEvent): Promise<void> => {
     if (!api) return Promise.resolve()
     const current = snapshot()
@@ -56,8 +61,7 @@ export function createContextBankSynchronizer(
       .then(() => {})
     // Preserve failure for this caller, but make the queue itself recover so later
     // commits are never blocked by an earlier transient disk/IPC error.
-    tail = run.catch(error => { onError(error) })
-    return run
+    return preserveQueue(run)
   }
 
   return {
@@ -73,11 +77,16 @@ export function createContextBankSynchronizer(
     flush() {
       return tail
     },
-    async copyForSaveAs(fromProjectPath, toProjectPath) {
-      if (!api || !fromProjectPath || !toProjectPath || fromProjectPath === toProjectPath) return
-      await tail
-      const { project } = snapshot()
-      await api.copyForSaveAs(project.id, fromProjectPath, toProjectPath)
+    copyForSaveAs(fromProjectPath, toProjectPath) {
+      if (!api || !fromProjectPath || !toProjectPath || fromProjectPath === toProjectPath) return Promise.resolve()
+      // Capture the project id now and put the copy itself in the same queue as syncs.
+      // A user edit made immediately after Save As therefore waits for the copied DB
+      // instead of racing it and being overwritten by a late file copy.
+      const projectId = snapshot().project.id
+      const run = tail
+        .then(() => api.copyForSaveAs(projectId, fromProjectPath, toProjectPath))
+        .then(() => {})
+      return preserveQueue(run)
     },
   }
 }
