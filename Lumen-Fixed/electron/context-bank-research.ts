@@ -1,7 +1,6 @@
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type {
-  ContextBankResearchChunk,
   ContextBankResearchChunkHit,
   ContextBankResearchPrior,
   ContextBankResearchPriorWriteRequest,
