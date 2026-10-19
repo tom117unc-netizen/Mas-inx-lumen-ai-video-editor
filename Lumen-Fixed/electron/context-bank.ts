@@ -13,7 +13,7 @@ import type {
   ContextBankTranscriptWord,
   ContextBankTranscriptSegment,
 } from '../shared/context-bank-analysis'
-import { validateAnalysisVersion, validateTranscriptItems } from '../shared/context-bank-analysis'
+import { validateAnalysisVersion, validateSourceRange, validateTranscriptItems } from '../shared/context-bank-analysis'
 import type {
   ContextBankQuery,
   ContextBankQueryClip,
@@ -66,6 +66,22 @@ function requireText(value: unknown, label: string, max = 256) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} must be a non-empty string`)
   if (value.length > max) throw new Error(`${label} is too long`)
   return value
+}
+
+function boundedCount(value: number, label: string, max: number) {
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${label} must be a non-negative finite number`)
+  return Math.min(max, Math.floor(value))
+}
+
+function orderedTranscriptItems<T extends { start: number; end: number }>(items: readonly T[]) {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => a.item.start - b.item.start || a.item.end - b.item.end || a.index - b.index)
+    .map(entry => entry.item)
+}
+
+function overlapsSourceRange(item: { start: number; end: number }, start?: number, end?: number) {
+  return (start === undefined || item.end > start) && (end === undefined || item.start < end)
 }
 
 interface ExistingSource {
@@ -410,15 +426,30 @@ class SqliteContextBankStore implements ContextBankStore {
   getTranscript(request: ContextBankTranscriptQuery): ContextBankTranscriptResult {
     this.ensureOpen()
     this.requireMatchingProject(request.projectPath, request.projectId, 'transcript query')
+    requireText(request.assetId, 'Transcript asset id', 256)
+    validateSourceRange(request.startSeconds, request.endSeconds)
+    const maxWords = boundedCount(request.maxWords, 'maxWords', 100_000)
+    const maxSegments = boundedCount(request.maxSegments, 'maxSegments', 100_000)
+    const maxCharacters = Math.max(500, boundedCount(request.maxCharacters, 'maxCharacters', 1_000_000))
+
     const source = this.sourceForAsset(request.assetId)
     if (!source?.fingerprint) return this.emptyTranscript(request.assetId, '', 'No current source fingerprint is available for this asset.')
     const row = this.db.prepare(`
       SELECT transcript_id,fingerprint,asset_id,provider,model,language,analysis_version,created_at,payload
-      FROM source_transcripts WHERE fingerprint = ? ORDER BY created_at DESC LIMIT 1
+      FROM source_transcripts WHERE fingerprint = ? ORDER BY created_at DESC, transcript_id DESC LIMIT 1
     `).get(source.fingerprint) as TranscriptRow | undefined
     if (!row) return this.emptyTranscript(request.assetId, source.fingerprint)
+
     const payload = JSON.parse(gunzipSync(Buffer.from(row.payload)).toString('utf8')) as TranscriptPayload
-    return {
+    const filteredWords = orderedTranscriptItems(payload.words)
+      .filter(item => overlapsSourceRange(item, request.startSeconds, request.endSeconds))
+    const filteredSegments = orderedTranscriptItems(payload.segments)
+      .filter(item => overlapsSourceRange(item, request.startSeconds, request.endSeconds))
+    const words = filteredWords.slice(0, maxWords)
+    const segments = filteredSegments.slice(0, maxSegments)
+    let truncated = words.length < filteredWords.length || segments.length < filteredSegments.length
+
+    const result: ContextBankTranscriptResult = {
       projectId: this.projectId,
       assetId: request.assetId,
       fingerprint: row.fingerprint,
@@ -428,11 +459,26 @@ class SqliteContextBankStore implements ContextBankStore {
       ...(row.language ? { language: row.language } : {}),
       analysisVersion: row.analysis_version,
       createdAt: Number(row.created_at),
-      words: payload.words,
-      segments: payload.segments,
-      truncated: false,
-      warnings: [],
+      words,
+      segments,
+      truncated,
+      warnings: truncated ? ['Transcript result was truncated to the requested budget.'] : [],
     }
+
+    if (JSON.stringify(result).length > maxCharacters) {
+      truncated = true
+      result.truncated = true
+      if (!result.warnings.length) result.warnings.push('Transcript result was truncated to the requested budget.')
+      while (JSON.stringify(result).length > maxCharacters && (result.words.length || result.segments.length)) {
+        const word = result.words.at(-1)
+        const segment = result.segments.at(-1)
+        if (!word) result.segments.pop()
+        else if (!segment) result.words.pop()
+        else if (segment.start > word.start || (segment.start === word.start && segment.end >= word.end)) result.segments.pop()
+        else result.words.pop()
+      }
+    }
+    return result
   }
 
   putObservations(_request: ContextBankObservationWriteRequest): ContextBankObservationResult {
