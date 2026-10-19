@@ -1,6 +1,6 @@
 /** Anime review AI tools: reliable IDs, nested timeline inventory and bounded project memory. */
 import { inspectTimelines, listTimelineMarkers } from '@/editor/anime-timeline-operations'
-import { planPngtuberMouthSync, planPngtuberSpriteReplacement } from '@/editor/anime-pngtuber-sync'
+import { planMouthSync, planSpriteVersionReplacement } from '@/editor/anime-pngtuber-sync'
 import { getProject, useEditor } from '@/editor/store'
 import { PEAKS_PER_SECOND } from '@/engine/audio-engine'
 import { desktop } from '@/lib/platform'
@@ -21,11 +21,11 @@ const PNGTUBER_TOOLS: AgentTool[] = [
     description: 'Preview closed/open PNGTuber mouth intervals from the cached waveform of one narration clip. Uses the clip’s real source in-point and playback speed, never mutates the timeline, and returns a bounded plan for review before any sprite edit is applied.',
     inputSchema: obj({
       clip_id: str('Exact narration clip ID from get_project or inspect_all_timelines.'),
-      threshold: num('Optional base mouth-open threshold, 0–1. Default 0.08.', { minimum: 0, maximum: 1 }),
-      min_hold_ms: num('Optional minimum mouth-state hold in milliseconds. Default 55.', { minimum: 0, maximum: 1_000 }),
-      sync_offset_ms: num('Optional visual sync offset in milliseconds. Positive delays the mouth. Default 0.', { minimum: -1_000, maximum: 1_000 }),
-      attack_ratio: num('Optional opening hysteresis multiplier. Default 1.08.', { minimum: 0.1, maximum: 3 }),
-      release_ratio: num('Optional closing hysteresis multiplier. Default 0.72.', { minimum: 0.1, maximum: 3 }),
+      open_threshold: num('Optional mouth-open threshold, 0–1. Default 0.12.', { minimum: 0, maximum: 1 }),
+      close_threshold: num('Optional mouth-close threshold, lower than open threshold. Default 0.075.', { minimum: 0, maximum: 1 }),
+      smoothing_ms: num('Optional waveform smoothing window in milliseconds. Default 45.', { minimum: 0, maximum: 1_000 }),
+      minimum_hold_frames: int('Optional minimum frames before changing mouth state. Default 2.', { minimum: 1, maximum: 120 }),
+      sync_offset_ms: num('Optional visual sync offset in milliseconds. Default 0.', { minimum: -5_000, maximum: 5_000 }),
     }, ['clip_id']),
     run: async args => {
       const project = getProject()
@@ -33,26 +33,29 @@ const PNGTUBER_TOOLS: AgentTool[] = [
       const clip = project.clips[clipId]
       if (!clip) throw new Error(`Unknown clip ID: ${clipId}`)
       if (!clip.assetId) throw new Error(`Clip ${clipId} has no source media asset.`)
+      if (clip.reverse) throw new Error('PNGTuber mouth planning does not support reversed narration clips.')
+      if (clip.keyframes.speed?.length) throw new Error('PNGTuber mouth planning does not support narration speed ramps yet; use a constant-speed clip.')
       const asset = project.assets[clip.assetId]
       if (!asset) throw new Error(`Clip ${clipId} references missing asset ${clip.assetId}.`)
       if (!asset.peaks?.length) throw new Error(`Asset ${asset.name} has no cached waveform peaks yet. Re-import or analyse the narration media first.`)
 
-      const intervals = planPngtuberMouthSync({
-        peaks: asset.peaks,
-        peaksPerSecond: PEAKS_PER_SECOND,
-        fps: project.settings.fps,
-        timelineStartFrame: clip.start,
-        durationFrames: clip.duration,
-        sourceStartSeconds: clip.sourceStart,
-        playbackRate: clip.speed,
-        config: {
-          ...(typeof args.threshold === 'number' ? { threshold: args.threshold } : {}),
-          ...(typeof args.min_hold_ms === 'number' ? { minHoldMs: args.min_hold_ms } : {}),
-          ...(typeof args.sync_offset_ms === 'number' ? { syncOffsetMs: args.sync_offset_ms } : {}),
-          ...(typeof args.attack_ratio === 'number' ? { attackRatio: args.attack_ratio } : {}),
-          ...(typeof args.release_ratio === 'number' ? { releaseRatio: args.release_ratio } : {}),
+      const intervals = planMouthSync(
+        { peaks: asset.peaks, peaksPerSecond: PEAKS_PER_SECOND },
+        {
+          timelineStartFrame: clip.start,
+          durationFrames: clip.duration,
+          sourceInSeconds: clip.inPoint / project.settings.fps,
+          speed: clip.speed,
         },
-      })
+        {
+          fps: project.settings.fps,
+          ...(typeof args.open_threshold === 'number' ? { openThreshold: args.open_threshold } : {}),
+          ...(typeof args.close_threshold === 'number' ? { closeThreshold: args.close_threshold } : {}),
+          ...(typeof args.smoothing_ms === 'number' ? { smoothingMs: args.smoothing_ms } : {}),
+          ...(typeof args.minimum_hold_frames === 'number' ? { minimumHoldFrames: args.minimum_hold_frames } : {}),
+          ...(typeof args.sync_offset_ms === 'number' ? { offsetMs: args.sync_offset_ms } : {}),
+        },
+      )
       const preview = intervals.slice(0, MAX_PNGTUBER_PREVIEW_INTERVALS)
       return {
         clip_id: clipId,
@@ -98,7 +101,7 @@ const PNGTUBER_TOOLS: AgentTool[] = [
         for (const id of allow) if (!project.clips[id]) throw new Error(`Unknown clip ID: ${id}`)
       }
       const clips = Object.values(project.clips).filter(clip => !allow || allow.has(clip.id))
-      const operations = planPngtuberSpriteReplacement(clips, replacements)
+      const operations = planSpriteVersionReplacement(clips, replacements)
       if (operations.length > MAX_PNGTUBER_REPLACEMENTS) {
         throw new Error(`Sprite replacement would touch ${operations.length} clips; narrow clip_ids below the ${MAX_PNGTUBER_REPLACEMENTS} operation safety cap.`)
       }
