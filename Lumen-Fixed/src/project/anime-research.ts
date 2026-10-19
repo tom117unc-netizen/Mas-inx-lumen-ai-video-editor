@@ -1,0 +1,257 @@
+import type { Project } from '@/editor/types'
+import type { ContextBankAPI } from '@shared/context-bank'
+import {
+  CONTEXT_BANK_RESEARCH_CHUNK_TEXT_MAX,
+  CONTEXT_BANK_RESEARCH_SEED_CHUNKS_MAX,
+  CONTEXT_BANK_RESEARCH_SEED_SOURCES_MAX,
+  CONTEXT_BANK_RESEARCH_SOURCE_TEXT_MAX,
+  type ContextBankResearchChunk,
+  type ContextBankResearchIdentity,
+  type ContextBankResearchIdentityCandidate,
+  type ContextBankResearchSource,
+  type ContextBankResearchState,
+} from '@shared/context-bank-research'
+import type { AnimeCatalogCandidate, AnimeCatalogResolveResult } from '@shared/anime-catalog'
+import type { IntegrationsAPI, WebPage, WebSearchResult } from '@shared/integrations'
+
+export interface AnimeResearchDependencies {
+  bank: ContextBankAPI
+  integrations: IntegrationsAPI
+  now?: () => number
+  allowRetry?: boolean
+}
+
+export type AnimeResearchSeedResult =
+  | { status: 'skipped' }
+  | { status: 'ready'; reused?: boolean; identity?: ContextBankResearchIdentity }
+  | { status: 'needs-confirmation'; candidates: ContextBankResearchIdentityCandidate[] }
+  | { status: 'error'; error: string; retryable: boolean }
+
+const SEARCH_LIMIT = 4
+const PAGE_LIMIT = CONTEXT_BANK_RESEARCH_SEED_SOURCES_MAX
+const SOURCE_TEXT_LIMIT = CONTEXT_BANK_RESEARCH_SOURCE_TEXT_MAX
+const CHUNK_LIMIT = CONTEXT_BANK_RESEARCH_SEED_CHUNKS_MAX
+
+function researchIdentity(candidate: AnimeCatalogCandidate): ContextBankResearchIdentity {
+  return {
+    source: candidate.source,
+    externalId: candidate.externalId,
+    canonicalTitle: candidate.canonicalTitle,
+    ...(candidate.year === undefined ? {} : { year: candidate.year }),
+    ...(candidate.format === undefined ? {} : { format: candidate.format }),
+    ...(candidate.episodes === undefined ? {} : { episodes: candidate.episodes }),
+  }
+}
+
+function researchCandidate(candidate: AnimeCatalogCandidate): ContextBankResearchIdentityCandidate {
+  return {
+    ...researchIdentity(candidate),
+    aliases: candidate.aliases,
+    score: candidate.score,
+  }
+}
+
+function existingProjectIdentity(project: Project): ContextBankResearchIdentity | undefined {
+  const identity = project.animeReview?.identity
+  if (!identity) return undefined
+  return {
+    source: identity.source,
+    externalId: identity.externalId,
+    canonicalTitle: identity.canonicalTitle,
+    ...(identity.year === undefined ? {} : { year: identity.year }),
+    ...(identity.format === undefined ? {} : { format: identity.format }),
+    ...(identity.episodes === undefined ? {} : { episodes: identity.episodes }),
+  }
+}
+
+function identityQueries(identity: ContextBankResearchIdentity) {
+  const suffix = [identity.year, identity.format].filter(value => value !== undefined && value !== '').join(' ')
+  const title = suffix ? `${identity.canonicalTitle} ${suffix}` : identity.canonicalTitle
+  return [
+    `${title} overview characters`,
+    `${title} episode guide`,
+    `${title} episode summaries`,
+    `${title} plot episodes`,
+  ].slice(0, SEARCH_LIMIT)
+}
+
+function normalizedUrl(value: string) {
+  try {
+    const url = new URL(value)
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
+async function sha256(value: string) {
+  const bytes = new TextEncoder().encode(value)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function explicitEpisodeNumber(text: string) {
+  const match = /(?:^|\b)(?:episode|ep\.?)[\s#:.-]*(\d{1,5})(?=\b|\s)/i.exec(text)
+  if (!match) return undefined
+  const value = Number(match[1])
+  return Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+function splitPageIntoChunks(sourceId: string, text: string): Omit<ContextBankResearchChunk, 'id'>[] {
+  const paragraphs = text
+    .split(/\n\s*\n+/)
+    .map(part => part.trim())
+    .filter(Boolean)
+
+  const chunks: Omit<ContextBankResearchChunk, 'id'>[] = []
+  let ordinal = 0
+
+  for (const paragraph of paragraphs) {
+    let remaining = paragraph
+    while (remaining && chunks.length < CHUNK_LIMIT) {
+      const piece = remaining.slice(0, CONTEXT_BANK_RESEARCH_CHUNK_TEXT_MAX).trim()
+      if (!piece) break
+      const firstLine = piece.split(/\r?\n/, 1)[0]?.trim()
+      const episodeNumber = explicitEpisodeNumber(piece)
+      chunks.push({
+        sourceId,
+        ordinal: ordinal++,
+        ...(firstLine && explicitEpisodeNumber(firstLine) !== undefined ? { heading: firstLine } : {}),
+        text: piece,
+        ...(episodeNumber === undefined ? {} : { episodeNumber }),
+      })
+      remaining = remaining.slice(piece.length).trim()
+    }
+    if (chunks.length >= CHUNK_LIMIT) break
+  }
+
+  return chunks
+}
+
+async function collectUniqueSearchResults(integrations: IntegrationsAPI, queries: readonly string[]) {
+  const found = new Map<string, WebSearchResult>()
+  for (const query of queries.slice(0, SEARCH_LIMIT)) {
+    const results = await integrations.web.search(query, 8)
+    for (const result of results) {
+      const url = normalizedUrl(result.url)
+      if (!url || found.has(url)) continue
+      found.set(url, { ...result, url })
+      if (found.size >= PAGE_LIMIT) return [...found.values()]
+    }
+  }
+  return [...found.values()]
+}
+
+async function sourceAndChunks(page: WebPage, retrievedAt: number): Promise<{ source: ContextBankResearchSource; chunks: ContextBankResearchChunk[] } | null> {
+  const url = normalizedUrl(page.url)
+  const text = String(page.text ?? '').slice(0, SOURCE_TEXT_LIMIT).trim()
+  if (!url || !text) return null
+
+  const sourceId = `web-${(await sha256(url)).slice(0, 32)}`
+  const source: ContextBankResearchSource = {
+    id: sourceId,
+    url,
+    ...(page.title?.trim() ? { title: page.title.trim().slice(0, 500) } : {}),
+    ...(page.site?.trim() ? { site: page.site.trim().slice(0, 256) } : {}),
+    retrievedAt,
+    contentHash: await sha256(text),
+    text,
+  }
+
+  const rawChunks = splitPageIntoChunks(sourceId, text)
+  const chunks: ContextBankResearchChunk[] = []
+  for (const chunk of rawChunks) {
+    const id = `chunk-${(await sha256(`${sourceId}:${chunk.ordinal}:${chunk.text}`)).slice(0, 32)}`
+    chunks.push({ id, ...chunk })
+  }
+  return { source, chunks }
+}
+
+function state(showQuery: string, status: ContextBankResearchState['status'], updatedAt: number, patch: Partial<ContextBankResearchState> = {}): ContextBankResearchState {
+  return { showQuery, status, updatedAt, ...patch }
+}
+
+function resolverError(result: Extract<AnimeCatalogResolveResult, { status: 'error' }>, showQuery: string, now: number): ContextBankResearchState {
+  return state(showQuery, 'error', now, { error: result.error })
+}
+
+/**
+ * Seeds one small, reusable web research pack after an anime-review project has
+ * a durable path. It never performs web work for unsaved/generic projects and
+ * never treats researched episode hints as verified source-media evidence.
+ */
+export async function seedAnimeResearchForProject(
+  project: Project,
+  projectPath: string | null,
+  dependencies: AnimeResearchDependencies,
+): Promise<AnimeResearchSeedResult> {
+  const setup = project.animeReview
+  if (!projectPath || !setup?.showQuery) return { status: 'skipped' }
+
+  const { bank, integrations } = dependencies
+  const now = dependencies.now ?? Date.now
+  const location = { projectPath, projectId: project.id }
+  const existing = await bank.getResearchStatus(location)
+
+  if (existing.state?.status === 'ready') {
+    return { status: 'ready', reused: true, identity: existing.state.identity }
+  }
+  if (existing.state?.status === 'error' && !dependencies.allowRetry) {
+    return { status: 'error', error: existing.state.error ?? 'Anime research previously failed', retryable: true }
+  }
+
+  let identity = existingProjectIdentity(project)
+  if (!identity) {
+    const resolved = await integrations.animeCatalog.resolve(setup.showQuery)
+    if (resolved.status === 'needs-confirmation') {
+      const candidates = resolved.candidates.map(researchCandidate)
+      await bank.setResearchState({
+        ...location,
+        state: state(setup.showQuery, 'needs-confirmation', now(), { candidates }),
+      })
+      return { status: 'needs-confirmation', candidates }
+    }
+    if (resolved.status === 'error') {
+      await bank.setResearchState({ ...location, state: resolverError(resolved, setup.showQuery, now()) })
+      return { status: 'error', error: resolved.error, retryable: resolved.retryable }
+    }
+    identity = researchIdentity(resolved.selected)
+  }
+
+  await bank.setResearchState({
+    ...location,
+    state: state(setup.showQuery, 'seeding', now(), { identity }),
+  })
+
+  try {
+    const results = await collectUniqueSearchResults(integrations, identityQueries(identity))
+    const sources: ContextBankResearchSource[] = []
+    const chunks: ContextBankResearchChunk[] = []
+
+    for (const result of results.slice(0, PAGE_LIMIT)) {
+      const page = await integrations.web.read(result.url, SOURCE_TEXT_LIMIT)
+      const built = await sourceAndChunks(page, now())
+      if (!built) continue
+      sources.push(built.source)
+      for (const chunk of built.chunks) {
+        if (chunks.length >= CHUNK_LIMIT) break
+        chunks.push(chunk)
+      }
+      if (sources.length >= PAGE_LIMIT || chunks.length >= CHUNK_LIMIT) break
+    }
+
+    if (!sources.length) throw new Error('No usable research pages were found')
+
+    const ready = state(setup.showQuery, 'ready', now(), { identity })
+    await bank.replaceResearchSeed({ ...location, state: ready, sources, chunks })
+    return { status: 'ready', identity }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    await bank.setResearchState({
+      ...location,
+      state: state(setup.showQuery, 'error', now(), { identity, error: message.slice(0, 2_000) }),
+    })
+    return { status: 'error', error: message, retryable: true }
+  }
+}
