@@ -1,6 +1,8 @@
 /**
  * Project store: the document, plus undo/redo built on Immer patches.
- * All mutations go through `dispatch(command, input)`.
+ * All user/AI editing mutations go through `dispatch(command, input)`; small
+ * system-owned metadata writes use explicit internal helpers below so they are
+ * never accidentally exposed as agent commands.
  */
 import { applyPatches, enablePatches, produceWithPatches, type Patch } from 'immer'
 import { create } from 'zustand'
@@ -8,6 +10,7 @@ import { commands, CommandError, type AnyCommand, type CommandInput, type Comman
 import { DEFAULT_TEXT, DEFAULT_TRANSFORM } from './defaults'
 import { createEmptyProject } from './new-project'
 import { verifyApprovedProposal, type ReviewProposal } from './anime-review-approval'
+import { sanitizeAnimeReviewSetup, type AnimeReviewIdentity } from './anime-review-project'
 import { normalizeProject } from './ops'
 import { applyMarkerChanges, type MarkerChange } from './anime-timeline-operations'
 import type { Clip, Project } from './types'
@@ -352,6 +355,42 @@ export function undoEntry(id: number) {
   const { past, undo } = useEditor.getState()
   if (past[past.length - 1]?.id !== id) return false
   undo()
+  return true
+}
+
+function sameAnimeReviewIdentity(a: AnimeReviewIdentity | undefined, b: AnimeReviewIdentity) {
+  return Boolean(a
+    && a.source === b.source
+    && a.externalId === b.externalId
+    && a.canonicalTitle === b.canonicalTitle
+    && a.year === b.year
+    && a.format === b.format
+    && a.episodes === b.episodes)
+}
+
+/**
+ * Persists system-confirmed anime identity into the canonical project without
+ * exposing an editor command the AI can call. This intentionally marks the
+ * document dirty but creates no undo step: it is durable project metadata, not
+ * a creative timeline edit.
+ */
+export function recordAnimeReviewIdentity(projectId: string, showQuery: string, identity: AnimeReviewIdentity) {
+  const state = useEditor.getState()
+  const before = state.project
+  if (before.id !== projectId || before.animeReview?.showQuery !== showQuery) return false
+
+  const setup = sanitizeAnimeReviewSetup({ ...before.animeReview, identity })
+  if (!setup?.identity || sameAnimeReviewIdentity(before.animeReview.identity, setup.identity)) return false
+
+  const [next, patches] = produceWithPatches(before, draft => {
+    draft.animeReview = structuredClone(setup)
+    normalizeProject(draft, before)
+  })
+  if (!patches.length) return false
+
+  const version = state.version + 1
+  useEditor.setState({ project: next, version })
+  emitCommitted('dispatch', version)
   return true
 }
 
