@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { Project } from './types'
+import { createClip, createTrack } from './defaults'
+import { createEmptyProject } from './new-project'
 import { previewAnimeAiPatch, verifyApprovedProposal } from './anime-review-approval'
 import { planMouthSync, planSpriteVersionReplacement } from './anime-pngtuber-sync'
 
@@ -25,25 +26,23 @@ describe('anime PNGTuber mouth planner', () => {
     ])
   })
   it('applies an approved sprite asset swap without changing unrelated clip properties', () => {
+    const project = createEmptyProject('PNGTuber test', { fps: 30 })
+    const spriteTrack = createTrack('video', { id: 'video-1', name: 'PNGTuber' })
+    project.tracks.push(spriteTrack)
     const fileSource = (name: string) => ({
       type: 'file' as const, url: `file:///${name}.png`, path: `C:\\sprites\\${name}.png`,
       mime: 'image/png', fileName: `${name}.png`, size: 1, mtime: 1,
     })
-    const project = {
-      id: 'project-1', name: 'PNGTuber test', settings: { fps: 30 },
-      clips: {
-        clip1: { id: 'clip1', assetId: 'old', trackId: 'video-1', start: 42, duration: 90, opacity: 0.75 },
-      },
-      assets: {
-        old: { id: 'old', name: 'old.png', kind: 'image', duration: 0, source: fileSource('old'), addedAt: 1 },
-        new: { id: 'new', name: 'new.png', kind: 'image', duration: 0, source: fileSource('new'), addedAt: 1 },
-      },
-      markers: [], tracks: [{ id: 'video-1', kind: 'video', locked: false }], sequences: {},
-    } as unknown as Project
+    project.assets.old = { id: 'old', name: 'old.png', kind: 'image', source: fileSource('old'), addedAt: 1 }
+    project.assets.new = { id: 'new', name: 'new.png', kind: 'image', source: fileSource('new'), addedAt: 1 }
+    project.clips.clip1 = createClip({
+      id: 'clip1', kind: 'image', assetId: 'old', trackId: spriteTrack.id,
+      start: 42, duration: 90, transform: { opacity: 0.75 },
+    })
     const patch = {
       format: 'lumen-ai-patch' as const,
       version: 1 as const,
-      projectId: 'project-1',
+      projectId: project.id,
       edits: [{ op: 'setAsset' as const, sequenceId: 'main', clipId: 'clip1', assetId: 'new' }],
     }
 
@@ -53,7 +52,7 @@ describe('anime PNGTuber mouth planner', () => {
     expect(result.clips.clip1.assetId).toBe('new')
     expect(result.clips.clip1.start).toBe(42)
     expect(result.clips.clip1.duration).toBe(90)
-    expect(result.clips.clip1.opacity).toBe(0.75)
+    expect(result.clips.clip1.transform.opacity).toBe(0.75)
   })
   it('rejects invalid sync thresholds', () => {
     expect(() => planMouthSync({ peaks: [], peaksPerSecond: 10 },
