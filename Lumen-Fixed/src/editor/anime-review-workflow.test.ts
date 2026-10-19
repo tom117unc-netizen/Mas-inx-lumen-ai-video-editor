@@ -25,8 +25,12 @@ describe('anime review workflow regression', () => {
     const reference = createClip({ id: 'reference', kind: 'image', assetId: 'closed', trackId: video.id, start: 0, duration: 300, transform: { x: 100, y: 20, scale: 0.8, opacity: 1 } })
     project.clips.reference = reference
 
-    const observations: SceneSearchObservation[] = [{ assetId: 'ep5', observation: { id: 'obs-pudding', kind: 'scene', start: 300, end: 315, text: 'Mitsuki pudding scene', confidence: 0.98 } }]
-    const research = { priors: [{ id: 'prior-wrong', showKey: 'show', query: 'pudding', claim: 'Pudding scene is episode 2', episodeNumber: 2, positionHint: 'middle', confidence: 1, evidence: { sourceId: 'web', chunkId: 'chunk' }, createdAt: 1, updatedAt: 1 }], chunks: [], sources: [], warnings: [], truncated: false } as unknown as ContextBankResearchSearchResult
+    const observations: SceneSearchObservation[] = [{ assetId: 'ep5', observation: { id: 'obs-pudding', kind: 'scene', start: 300, end: 315, text: 'Mitsuki pudding scene', confidence: 0.98, provenance: { producer: 'workflow-test', createdAt: 1 }, analysisVersion: 'test-v1' } }]
+    const research: ContextBankResearchSearchResult = {
+      projectId: project.id,
+      priors: [{ id: 'prior-wrong', query: 'pudding', text: 'Pudding scene is episode 2', episodeNumber: 2, positionHint: 'middle', confidence: 1, evidence: { sourceId: 'web', chunkId: 'chunk', excerpt: 'Episode 2 pudding' }, provenance: { producer: 'workflow-test', analysisVersion: 'test-v1', createdAt: 1 } }],
+      chunks: [], truncated: false, warnings: [],
+    }
     const candidates = planAnimeSceneSearch({ query: 'Mitsuki pudding scene', project, verifiedObservations: observations, research, maxCandidates: 8 })
     expect(candidates[0]).toMatchObject({ assetId: 'ep5', authority: 'verified-source', requiresVerification: false })
 
