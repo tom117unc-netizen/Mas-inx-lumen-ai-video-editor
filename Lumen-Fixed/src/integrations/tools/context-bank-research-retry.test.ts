@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   project: {
@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   setState: vi.fn(),
   subscribe: vi.fn(() => () => {}),
   flush: vi.fn(async () => {}),
+  saveProject: vi.fn(async () => true),
   recordIdentity: vi.fn(),
   seed: vi.fn(async (_project: unknown, _projectPath: string, dependencies?: { allowRetry?: boolean }) => (
     dependencies?.allowRetry
@@ -27,6 +28,7 @@ vi.mock('@/editor/store', () => ({
 
 vi.mock('@/project/session', () => ({
   useSession: { getState: () => ({ path: 'D:\\Reviews\\review.lumen' }) },
+  saveProject: mocks.saveProject,
 }))
 
 vi.mock('@/project/context-bank-runtime', () => ({
@@ -46,6 +48,14 @@ vi.mock('@/lib/platform', () => ({
 import { CONTEXT_BANK_RESEARCH_TOOLS } from './context-bank-research'
 
 describe('configure_anime_review_project retry path', () => {
+  beforeEach(() => {
+    mocks.setState.mockClear()
+    mocks.flush.mockClear()
+    mocks.saveProject.mockClear()
+    mocks.recordIdentity.mockClear()
+    mocks.seed.mockClear()
+  })
+
   it('forces a reseed when the same show already has a cached retryable research error', async () => {
     const configure = CONTEXT_BANK_RESEARCH_TOOLS.find(tool => tool.name === 'configure_anime_review_project')!
 
@@ -59,5 +69,14 @@ describe('configure_anime_review_project retry path', () => {
     })
     expect(mocks.seed).toHaveBeenCalledTimes(1)
     expect(mocks.seed.mock.calls[0]?.[2]).toMatchObject({ allowRetry: true })
+  })
+
+  it('saves the current project after configuring research so anime-review metadata survives restart', async () => {
+    const configure = CONTEXT_BANK_RESEARCH_TOOLS.find(tool => tool.name === 'configure_anime_review_project')!
+
+    await configure.run({ show_query: 'Frieren' })
+
+    expect(mocks.saveProject).toHaveBeenCalledTimes(1)
+    expect(mocks.recordIdentity).toHaveBeenCalledBefore(mocks.saveProject)
   })
 })
