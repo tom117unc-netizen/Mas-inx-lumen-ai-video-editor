@@ -1,12 +1,14 @@
-import { dynamicTool, isStepCount, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
+import { dynamicTool, generateText, isStepCount, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
 import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest } from '../../../shared/ai'
 import { IPC, type BridgeTool } from '../../../shared/integrations'
 import { callEditorTool, editorTools, editorWindow } from '../editor-rpc'
+import { prepareAgentToolVisualOutput, type AgentVisualAnalyser, type AgentVisualAnalyserFactory } from './agent-sidecar-integration'
 import { deleteHistory, readHistory, writeHistory } from './chats'
 import { effortSettings, geminiEfforts, openaiEfforts, type ModelApi } from './effort'
 import { forgetLocalSession, runLocal, stopLocal } from './local-agents'
 import { detailedProviderError } from './provider-error'
-import { languageModel, MissingKeyError } from './providers'
+import { languageModel, listModels, MissingKeyError } from './providers'
+import { analyseWithVisionSidecar, selectVisionSidecar, VisionEvidenceCache } from './vision-sidecar'
 
 /**
  * The Copilot's brain when it's a model the user brought a key for: an AI SDK
@@ -79,6 +81,7 @@ interface Picture {
 interface ToolOutput {
   text: string
   pictures: number
+  delivery: 'text' | 'follow' | 'native'
 }
 
 const PICTURES_NOTE = 'The pictures from the tools you just called:'
@@ -151,7 +154,12 @@ function isEffortRejection(err: unknown) {
   return /effort|reasoning|thinking|budget/i.test(detailedProviderError(err))
 }
 
-function buildTools(defs: BridgeTool[], pictures: Map<string, Picture[]>, modes: () => { native: boolean; vision: boolean }): ToolSet {
+function buildTools(
+  defs: BridgeTool[],
+  pictures: Map<string, Picture[]>,
+  modes: () => { native: boolean; vision: boolean },
+  getAnalyse?: AgentVisualAnalyserFactory,
+): ToolSet {
   const tools: ToolSet = {}
   for (const def of defs) {
     tools[def.name] = dynamicTool({
@@ -162,16 +170,16 @@ function buildTools(defs: BridgeTool[], pictures: Map<string, Picture[]>, modes:
         const text = res.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n')
         if (res.isError) throw new Error(text || 'The tool failed.')
         const pics = res.content.flatMap((c) => (c.type === 'image' ? [{ data: c.data, mimeType: c.mimeType }] : []))
-        if (pics.length) pictures.set(toolCallId, pics)
-        return { text, pictures: pics.length }
+        const prepared = await prepareAgentToolVisualOutput({ toolText: text, pictures: pics, ...modes(), getAnalyse })
+        if (prepared.pictures.length) pictures.set(toolCallId, prepared.pictures)
+        else pictures.delete(toolCallId)
+        return { text: prepared.text, pictures: prepared.pictures.length, delivery: prepared.delivery }
       },
       toModelOutput: ({ toolCallId, output }) => {
         const out = output as ToolOutput
         const pics = pictures.get(toolCallId) ?? []
-        if (!pics.length) return { type: 'text', value: out.text }
-        const { native, vision } = modes()
-        if (!vision) return { type: 'text', value: `${out.text}\n\n[${pics.length} picture${pics.length > 1 ? 's' : ''} not shown — this model can’t see images.]` }
-        if (!native) return { type: 'text', value: `${out.text}\n\n${FOLLOWS_NOTE}` }
+        if (!pics.length || out.delivery === 'text') return { type: 'text', value: out.text }
+        if (out.delivery === 'follow') return { type: 'text', value: `${out.text}\n\n${FOLLOWS_NOTE}` }
         return {
           type: 'content',
           value: [{ type: 'text', text: out.text }, ...pics.map((p) => ({ type: 'file' as const, mediaType: p.mimeType, data: { type: 'data' as const, data: p.data } }))],
@@ -212,7 +220,36 @@ async function runModel(req: AgentRunRequest) {
     let vision = canSee !== false && !textOnly.has(key)
     let effort = req.target.effort && !noEffort.has(key) ? req.target.effort : undefined
     const pictures = new Map<string, Picture[]>()
-    const tools = buildTools(await editorTools(), pictures, () => ({ native, vision }))
+    const visionCache = new VisionEvidenceCache()
+    let analyserPromise: Promise<AgentVisualAnalyser | undefined> | undefined
+    const getAnalyse: AgentVisualAnalyserFactory = () => {
+      analyserPromise ??= (async () => {
+        const { models } = await listModels(provider)
+        const sidecarModel = selectVisionSidecar(models.filter((candidate) => candidate.id !== modelId))
+        if (!sidecarModel) return undefined
+        const sidecar = await languageModel(provider, sidecarModel.id, req.conversationId)
+        emit({ type: 'status', message: `Using ${sidecarModel.name} to inspect pictures for this text-only model.` })
+        const analyse: AgentVisualAnalyser = (toolText, sidecarPictures) =>
+          analyseWithVisionSidecar({
+            modelId: `${provider}:${sidecarModel.id}`,
+            toolText,
+            pictures: sidecarPictures,
+            cache: visionCache,
+            run: async (messages) => {
+              const result = await generateText({
+                model: sidecar.model,
+                messages,
+                headers: sidecar.headers,
+                abortSignal: controller.signal,
+              })
+              return result.text
+            },
+          })
+        return analyse
+      })().catch(() => undefined)
+      return analyserPromise
+    }
+    const tools = buildTools(await editorTools(), pictures, () => ({ native, vision }), getAnalyse)
 
     const stored = historyOf(req.conversationId)
     const history = native ? stripReasoning(stored) : stored
