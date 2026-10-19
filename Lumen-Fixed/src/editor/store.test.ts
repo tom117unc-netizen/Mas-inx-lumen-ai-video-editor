@@ -2,7 +2,18 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { createClip } from './defaults'
 import { createEmptyProject } from './new-project'
 import { clipEnd } from './ops'
-import { beginTransaction, dispatch, endTransaction, getProject, migrateProject, rollbackTo, savepoint, useEditor } from './store'
+import {
+  beginTransaction,
+  dispatch,
+  endTransaction,
+  getProject,
+  migrateProject,
+  rollbackTo,
+  savepoint,
+  subscribeCommittedEdits,
+  useEditor,
+  type CommittedEditEvent,
+} from './store'
 import type { Project } from './types'
 
 const trackId = (name: string) => getProject().tracks.find((t) => t.name === name)!.id
@@ -163,5 +174,128 @@ describe('loadProject / migrateProject', () => {
     expect(c.transform).toMatchObject({ x: 5, rotateX: 0, rotateY: 0, z: 0 })
     expect(c.text).toMatchObject({ content: 'Hi', font: 'sans' })
     expect(getProject().markers).toEqual([])
+  })
+})
+
+describe('committed edit observers', () => {
+  function capture() {
+    const events: CommittedEditEvent[] = []
+    const unsubscribe = subscribeCommittedEdits((event) => events.push(event))
+    return { events, unsubscribe }
+  }
+
+  it('emits once after a successful dispatch and stays silent for rejected, no-op, and derived edits', () => {
+    const { events, unsubscribe } = capture()
+    try {
+      expect(dispatch('clip.add', { trackId: trackId('Titles'), kind: 'text', start: -1, duration: 0 }).ok).toBe(false)
+      expect(events).toEqual([])
+
+      const added = dispatch('clip.add', { trackId: trackId('Titles'), kind: 'text', start: 0, duration: 30 })
+      const id = (added as { result: string }).result
+      const entry = useEditor.getState().past.at(-1)!
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        kind: 'dispatch',
+        revision: useEditor.getState().version,
+        historyId: entry.id,
+        label: entry.label,
+        source: entry.source,
+      })
+
+      events.length = 0
+      expect(dispatch('clip.update', { ids: [id], patch: { name: getProject().clips[id].name } }).ok).toBe(true)
+      expect(events).toEqual([])
+
+      dispatch('clip.update', { ids: [id], patch: { name: 'Derived name' } }, { history: false })
+      expect(events).toEqual([])
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('emits one transaction event only when the transaction commits', () => {
+    const { events, unsubscribe } = capture()
+    try {
+      beginTransaction('Agent batch', 'ai')
+      dispatch('marker.add', { frame: 1 })
+      dispatch('marker.add', { frame: 2 })
+      expect(events).toEqual([])
+      const entry = endTransaction()!
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        kind: 'transaction',
+        revision: useEditor.getState().version,
+        historyId: entry.id,
+        label: 'Agent batch',
+        source: 'ai',
+      })
+
+      events.length = 0
+      beginTransaction('Rolled back', 'ai')
+      const mark = savepoint()!
+      dispatch('marker.add', { frame: 3 })
+      rollbackTo(mark)
+      expect(endTransaction()).toBeNull()
+      expect(events).toEqual([])
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('emits undo and redo with the history entry they apply', () => {
+    dispatch('marker.add', { frame: 10 })
+    const original = useEditor.getState().past.at(-1)!
+    const { events, unsubscribe } = capture()
+    try {
+      useEditor.getState().undo()
+      expect(events[0]).toMatchObject({
+        kind: 'undo',
+        revision: useEditor.getState().version,
+        historyId: original.id,
+        label: original.label,
+        source: original.source,
+      })
+
+      useEditor.getState().redo()
+      expect(events[1]).toMatchObject({
+        kind: 'redo',
+        revision: useEditor.getState().version,
+        historyId: original.id,
+        label: original.label,
+        source: original.source,
+      })
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('emits load without inventing a history entry', () => {
+    const { events, unsubscribe } = capture()
+    try {
+      useEditor.getState().loadProject(createEmptyProject('Loaded'))
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({ kind: 'load', revision: useEditor.getState().version })
+      expect(events[0].historyId).toBeUndefined()
+      expect(events[0].label).toBeUndefined()
+      expect(events[0].source).toBeUndefined()
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('reuses a coalesced history id instead of turning a drag into new logical edits', () => {
+    const added = dispatch('clip.add', { trackId: trackId('Titles'), kind: 'text', start: 0, duration: 30 })
+    const id = (added as { result: string }).result
+    const { events, unsubscribe } = capture()
+    try {
+      dispatch('clip.update', { ids: [id], patch: { transform: { x: 10 } } }, { coalesce: 'drag' })
+      dispatch('clip.update', { ids: [id], patch: { transform: { x: 20 } } }, { coalesce: 'drag' })
+      expect(events).toHaveLength(2)
+      expect(events[0].kind).toBe('dispatch')
+      expect(events[1].kind).toBe('dispatch')
+      expect(events[1].historyId).toBe(events[0].historyId)
+    } finally {
+      unsubscribe()
+    }
   })
 })
