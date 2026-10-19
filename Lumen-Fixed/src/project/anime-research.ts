@@ -201,11 +201,12 @@ export async function seedAnimeResearchForProject(
   const now = resolvedDependencies.now ?? Date.now
   const location = { projectPath, projectId: project.id }
   const existing = await bank.getResearchStatus(location)
+  const sameQuery = existing.state?.showQuery === setup.showQuery
 
-  if (existing.state?.status === 'ready') {
+  if (sameQuery && existing.state?.status === 'ready') {
     return { status: 'ready', reused: true, identity: existing.state.identity }
   }
-  if (existing.state?.status === 'error' && !resolvedDependencies.allowRetry) {
+  if (sameQuery && existing.state?.status === 'error' && !resolvedDependencies.allowRetry) {
     return { status: 'error', error: existing.state.error ?? 'Anime research previously failed', retryable: true }
   }
 
