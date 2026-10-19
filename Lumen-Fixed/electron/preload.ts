@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { AgentEvent } from '../shared/ai'
 import { APP_IPC, type AppAPI, type CollectProgress, type UpdateState } from '../shared/app'
+import { CONTEXT_BANK_RESEARCH_IPC } from '../shared/context-bank-research'
 import type { IngestClip, IngestState } from '../shared/ingest'
 import { IPC, type BridgeRequest, type BridgeState, type IntegrationsAPI, type Job, type McpServerState } from '../shared/integrations'
 
@@ -153,6 +154,11 @@ const appApi: AppAPI = {
     getTranscript: (query) => invoke(APP_IPC.contextBankGetTranscript, query),
     putObservations: (request) => invoke(APP_IPC.contextBankPutObservations, request),
     getObservations: (query) => invoke(APP_IPC.contextBankGetObservations, query),
+    getResearchStatus: (request) => invoke(CONTEXT_BANK_RESEARCH_IPC.status, request),
+    setResearchState: (request) => invoke(CONTEXT_BANK_RESEARCH_IPC.setState, request),
+    replaceResearchSeed: (request) => invoke(CONTEXT_BANK_RESEARCH_IPC.replaceSeed, request),
+    searchResearch: (request) => invoke(CONTEXT_BANK_RESEARCH_IPC.search, request),
+    putResearchPrior: (request) => invoke(CONTEXT_BANK_RESEARCH_IPC.putPrior, request),
     status: (projectPath, projectId) => invoke(APP_IPC.contextBankStatus, projectPath, projectId),
     copyForSaveAs: (projectId, fromProjectPath, toProjectPath) => invoke(APP_IPC.contextBankCopySaveAs, projectId, fromProjectPath, toProjectPath),
     clear: (projectPath, projectId) => invoke(APP_IPC.contextBankClear, projectPath, projectId),
