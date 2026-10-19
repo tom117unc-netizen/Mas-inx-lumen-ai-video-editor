@@ -1,8 +1,9 @@
-import { getProject, subscribeCommittedEdits, useEditor } from '@/editor/store'
+import { getProject, recordAnimeReviewIdentity, subscribeCommittedEdits, useEditor } from '@/editor/store'
+import type { AnimeReviewIdentity } from '@/editor/anime-review-project'
 import type { Project } from '@/editor/types'
 import { api as integrationsApi } from '@/integrations/store'
 import { desktop } from '@/lib/platform'
-import { seedAnimeResearchForProject } from './anime-research'
+import { seedAnimeResearchForProject, type AnimeResearchSeedResult } from './anime-research'
 import { useSession } from './session'
 import { createContextBankSynchronizer, type ContextBankSynchronizer } from './context-bank-sync'
 
@@ -42,6 +43,20 @@ export async function runAnimeResearchAfterContextBankSync(
   await seed(project, projectPath)
 }
 
+/**
+ * Copies only confirmed catalogue identity into the portable .lumen intent.
+ * Research pages, chunks and priors remain Context Bank-only.
+ */
+export function recordResolvedAnimeResearchIdentity(
+  project: Project,
+  result: AnimeResearchSeedResult,
+  record: (projectId: string, showQuery: string, identity: AnimeReviewIdentity) => boolean = recordAnimeReviewIdentity,
+) {
+  const showQuery = project.animeReview?.showQuery
+  if (!showQuery || result.status !== 'ready' || !result.identity) return false
+  return record(project.id, showQuery, result.identity)
+}
+
 let started = false
 let activeSynchronizer: ContextBankSynchronizer | null = null
 
@@ -74,10 +89,13 @@ export function startContextBankRuntime() {
     // The path may have changed while a queued Context Bank write was finishing.
     // Avoid spending network work on a project that is no longer active.
     if (getProject().id !== project.id || useSession.getState().path !== projectPath) return
-    await seedAnimeResearchForProject(project, projectPath, {
+    const result = await seedAnimeResearchForProject(project, projectPath, {
       bank: desktop.contextBank,
       integrations: integrationsApi,
     })
+    // recordAnimeReviewIdentity re-checks project id/query, so a project switch
+    // during the network request cannot write identity into the wrong document.
+    recordResolvedAnimeResearchIdentity(project, result)
   }
 
   const reconcileAndResearch = (project: Project, projectPath: string | null) =>
