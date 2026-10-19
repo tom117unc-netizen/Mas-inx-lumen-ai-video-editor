@@ -10,7 +10,7 @@ import { CONTEXT_BANK_ANALYSIS_TOOLS } from './context-bank-analysis'
 import { makeContextBankQuery } from './context-bank-query'
 import { CONTEXT_BANK_RESEARCH_TOOLS } from './context-bank-research'
 import { SOURCE_SCENE_SEARCH_TOOL } from './source-scene-search'
-import { arr, obj, str, num, int, oneOf, type AgentTool } from './kit'
+import { list, obj, str, num, int, oneOf, type AgentTool } from './kit'
 
 const MAX_PNGTUBER_PREVIEW_INTERVALS = 1_200
 const MAX_PNGTUBER_REPLACEMENTS = 5_000
@@ -73,11 +73,11 @@ const PNGTUBER_TOOLS: AgentTool[] = [
     name: 'plan_pngtuber_sprite_replacement',
     description: 'Preview an explicit PNGTuber sprite-version replacement (for example A assets to matching B assets) without changing timing, transforms, effects, keyframes or the timeline. Only exact asset-ID mappings are considered; no filename guessing is performed.',
     inputSchema: obj({
-      replacements: arr(obj({
+      replacements: list('Explicit old→new asset mappings.', obj({
         from_asset_id: str('Exact currently-used sprite asset ID.'),
         to_asset_id: str('Exact replacement sprite asset ID.'),
-      }, ['from_asset_id', 'to_asset_id']), 'Explicit old→new asset mappings.'),
-      clip_ids: arr(str('Exact clip ID.'), 'Optional clip allow-list. Omit to inspect all clips in the open timeline.'),
+      }, ['from_asset_id', 'to_asset_id'])),
+      clip_ids: list('Optional clip allow-list. Omit to inspect all clips in the open timeline.', str('Exact clip ID.')),
     }, ['replacements']),
     run: async args => {
       const project = getProject()
