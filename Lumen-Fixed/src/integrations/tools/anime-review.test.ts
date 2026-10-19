@@ -15,6 +15,7 @@ const EXPECTED_TOOLS = [
   'plan_source_scene_search',
   'plan_pngtuber_mouth_sync',
   'plan_pngtuber_sprite_replacement',
+  'propose_pngtuber_sprite_replacement',
 ]
 
 describe('ANIME_REVIEW_TOOLS', () => {
