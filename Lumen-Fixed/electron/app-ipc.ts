@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { APP_IPC, type MediaFolder } from '../shared/app'
 import type { ContextBankQuery, ContextBankSyncRequest } from '../shared/context-bank'
+import type { ContextBankTranscriptQuery, ContextBankTranscriptWriteRequest } from '../shared/context-bank-analysis'
 import path from 'node:path'
 import { collectProject } from './collect'
 import { clearContextBank, copyContextBankForSaveAs, openContextBank } from './context-bank'
@@ -99,6 +100,24 @@ export function registerAppIpc(isTrustedUrl: (url: string) => boolean, getStartu
     if (!projectPath || !projectId || typeof request?.purpose !== 'string') throw new Error('Invalid Context Bank query request')
     const store = openContextBank(projectPath, projectId)
     try { return store.query(request as ContextBankQuery) } finally { store.close() }
+  })
+  handle(APP_IPC.contextBankPutTranscript, (_win, value: unknown) => {
+    const request = value as Partial<ContextBankTranscriptWriteRequest>
+    const projectPath = str(request?.projectPath)
+    const projectId = str(request?.projectId)
+    if (!projectPath || !projectId || !str(request?.assetId) || !Array.isArray(request?.words) || !Array.isArray(request?.segments)) {
+      throw new Error('Invalid Context Bank transcript write request')
+    }
+    const store = openContextBank(projectPath, projectId)
+    try { return store.putTranscript(request as ContextBankTranscriptWriteRequest) } finally { store.close() }
+  })
+  handle(APP_IPC.contextBankGetTranscript, (_win, value: unknown) => {
+    const request = value as Partial<ContextBankTranscriptQuery>
+    const projectPath = str(request?.projectPath)
+    const projectId = str(request?.projectId)
+    if (!projectPath || !projectId || !str(request?.assetId)) throw new Error('Invalid Context Bank transcript query')
+    const store = openContextBank(projectPath, projectId)
+    try { return store.getTranscript(request as ContextBankTranscriptQuery) } finally { store.close() }
   })
   handle(APP_IPC.contextBankStatus, (_win, projectPath: unknown, projectId: unknown) => {
     const store = openContextBank(str(projectPath), str(projectId))
