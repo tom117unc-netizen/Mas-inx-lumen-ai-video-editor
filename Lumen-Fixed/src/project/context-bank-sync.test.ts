@@ -21,6 +21,10 @@ function api(sync: ContextBankAPI['sync']): ContextBankAPI {
   return {
     sync,
     query: vi.fn(),
+    putTranscript: vi.fn(),
+    getTranscript: vi.fn(),
+    putObservations: vi.fn(),
+    getObservations: vi.fn(),
     status: vi.fn(),
     copyForSaveAs: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
@@ -95,32 +99,32 @@ describe('Context Bank renderer synchronizer', () => {
     expect(maximumInFlight).toBe(1)
   })
 
-  it('serializes Save As copy before edits can sync into the new path', async () => {
-    const project = createEmptyProject('Save As queue')
-    project.id = 'project-save-as'
-    let projectPath = 'D:\\Reviews\\old.lumen'
-    let revision = 4
-    let releaseCopy!: () => void
-    const copyGate = new Promise<void>(resolve => { releaseCopy = resolve })
-    const sync = vi.fn<ContextBankAPI['sync']>(async request => status(request.mirror.projectId, request.projectPath, request.mirror.revision))
-    const copyForSaveAs = vi.fn<ContextBankAPI['copyForSaveAs']>(async () => { await copyGate })
-    const contextApi = api(sync)
-    contextApi.copyForSaveAs = copyForSaveAs
-    const bank = createContextBankSynchronizer(contextApi, () => ({ project, revision, projectPath }))
-
+  it('queues Save As copying behind prior writes and allows a later reconciliation', async () => {
+    const project = createEmptyProject('Copy')
+    project.id = 'project-copy'
+    let releaseSync!: () => void
+    const gate = new Promise<void>(resolve => { releaseSync = resolve })
+    const calls: string[] = []
+    const sync = vi.fn<ContextBankAPI['sync']>(async request => {
+      calls.push(`sync:${request.projectPath}`)
+      await gate
+      return status(request.mirror.projectId, request.projectPath, request.mirror.revision)
+    })
+    const bankApi = api(sync)
+    bankApi.copyForSaveAs = vi.fn(async (_projectId, from, to) => { calls.push(`copy:${from}->${to}`) })
+    let projectPath = 'D:\\Old\\review.lumen'
+    const bank = createContextBankSynchronizer(bankApi, () => ({ project, revision: 1, projectPath }))
+    const pending = bank.record({ kind: 'dispatch', revision: 1, historyId: 1, at: 1 })
+    const copying = bank.copyForSaveAs(projectPath, 'E:\\New\\review.lumen')
+    projectPath = 'E:\\New\\review.lumen'
+    releaseSync()
+    await pending
+    await copying
     await bank.reconcile()
-    projectPath = 'D:\\Reviews\\copy.lumen'
-    const copy = bank.copyForSaveAs('D:\\Reviews\\old.lumen', projectPath)
-    revision = 5
-    const edit = bank.record({ kind: 'dispatch', revision: 5, historyId: 5, at: 5 })
-    await Promise.resolve()
-    expect(copyForSaveAs).toHaveBeenCalledTimes(1)
-    expect(sync).toHaveBeenCalledTimes(1)
-
-    releaseCopy()
-    await copy
-    await edit
-    expect(sync).toHaveBeenCalledTimes(2)
-    expect(sync.mock.calls[1][0]).toMatchObject({ projectPath: 'D:\\Reviews\\copy.lumen', mirror: { revision: 5 } })
+    expect(calls).toEqual([
+      'sync:D:\\Old\\review.lumen',
+      'copy:D:\\Old\\review.lumen->E:\\New\\review.lumen',
+      'sync:E:\\New\\review.lumen',
+    ])
   })
 })
