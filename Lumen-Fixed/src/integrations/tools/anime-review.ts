@@ -1,4 +1,5 @@
 /** Anime review AI tools: reliable IDs, nested timeline inventory and bounded project memory. */
+import { previewAnimeAiPatch } from '@/editor/anime-review-approval'
 import { inspectTimelines, listTimelineMarkers } from '@/editor/anime-timeline-operations'
 import { PEAKS_PER_SECOND } from '@/editor/defaults'
 import { planMouthSync, planSpriteVersionReplacement } from '@/editor/anime-pngtuber-sync'
@@ -14,6 +15,44 @@ import { list, obj, str, num, int, oneOf, type AgentTool } from './kit'
 
 const MAX_PNGTUBER_PREVIEW_INTERVALS = 1_200
 const MAX_PNGTUBER_REPLACEMENTS = 5_000
+
+type SpriteReplacementArgs = Record<string, unknown>
+
+function buildSpriteReplacementPlan(project: ReturnType<typeof getProject>, args: SpriteReplacementArgs) {
+  if (!Array.isArray(args.replacements) || !args.replacements.length) throw new Error('At least one explicit sprite replacement is required.')
+  const replacements: Record<string, string> = {}
+  for (const raw of args.replacements) {
+    if (!raw || typeof raw !== 'object') throw new Error('Invalid sprite replacement entry.')
+    const entry = raw as Record<string, unknown>
+    const from = typeof entry.from_asset_id === 'string' ? entry.from_asset_id : ''
+    const to = typeof entry.to_asset_id === 'string' ? entry.to_asset_id : ''
+    if (!from || !to) throw new Error('Each sprite replacement needs from_asset_id and to_asset_id.')
+    if (!project.assets[from]) throw new Error(`Unknown source sprite asset ID: ${from}`)
+    if (!project.assets[to]) throw new Error(`Unknown replacement sprite asset ID: ${to}`)
+    replacements[from] = to
+  }
+
+  const allow = Array.isArray(args.clip_ids)
+    ? new Set(args.clip_ids.filter((id): id is string => typeof id === 'string'))
+    : null
+  if (allow) {
+    for (const id of allow) if (!project.clips[id]) throw new Error(`Unknown clip ID: ${id}`)
+  }
+  const clips = Object.values(project.clips).filter(clip => !allow || allow.has(clip.id))
+  const operations = planSpriteVersionReplacement(clips, replacements)
+  if (operations.length > MAX_PNGTUBER_REPLACEMENTS) {
+    throw new Error(`Sprite replacement would touch ${operations.length} clips; narrow clip_ids below the ${MAX_PNGTUBER_REPLACEMENTS} operation safety cap.`)
+  }
+  return operations
+}
+
+const spriteReplacementSchema = () => obj({
+  replacements: list('Explicit old→new asset mappings.', obj({
+    from_asset_id: str('Exact currently-used sprite asset ID.'),
+    to_asset_id: str('Exact replacement sprite asset ID.'),
+  }, ['from_asset_id', 'to_asset_id'])),
+  clip_ids: list('Optional clip allow-list. Omit to inspect all clips in the open timeline.', str('Exact clip ID.')),
+}, ['replacements'])
 
 const PNGTUBER_TOOLS: AgentTool[] = [
   {
@@ -72,43 +111,42 @@ const PNGTUBER_TOOLS: AgentTool[] = [
   {
     name: 'plan_pngtuber_sprite_replacement',
     description: 'Preview an explicit PNGTuber sprite-version replacement (for example A assets to matching B assets) without changing timing, transforms, effects, keyframes or the timeline. Only exact asset-ID mappings are considered; no filename guessing is performed.',
-    inputSchema: obj({
-      replacements: list('Explicit old→new asset mappings.', obj({
-        from_asset_id: str('Exact currently-used sprite asset ID.'),
-        to_asset_id: str('Exact replacement sprite asset ID.'),
-      }, ['from_asset_id', 'to_asset_id'])),
-      clip_ids: list('Optional clip allow-list. Omit to inspect all clips in the open timeline.', str('Exact clip ID.')),
-    }, ['replacements']),
+    inputSchema: spriteReplacementSchema(),
     run: async args => {
-      const project = getProject()
-      if (!Array.isArray(args.replacements) || !args.replacements.length) throw new Error('At least one explicit sprite replacement is required.')
-      const replacements: Record<string, string> = {}
-      for (const raw of args.replacements) {
-        if (!raw || typeof raw !== 'object') throw new Error('Invalid sprite replacement entry.')
-        const entry = raw as Record<string, unknown>
-        const from = typeof entry.from_asset_id === 'string' ? entry.from_asset_id : ''
-        const to = typeof entry.to_asset_id === 'string' ? entry.to_asset_id : ''
-        if (!from || !to) throw new Error('Each sprite replacement needs from_asset_id and to_asset_id.')
-        if (!project.assets[from]) throw new Error(`Unknown source sprite asset ID: ${from}`)
-        if (!project.assets[to]) throw new Error(`Unknown replacement sprite asset ID: ${to}`)
-        replacements[from] = to
-      }
-
-      const allow = Array.isArray(args.clip_ids)
-        ? new Set(args.clip_ids.filter((id): id is string => typeof id === 'string'))
-        : null
-      if (allow) {
-        for (const id of allow) if (!project.clips[id]) throw new Error(`Unknown clip ID: ${id}`)
-      }
-      const clips = Object.values(project.clips).filter(clip => !allow || allow.has(clip.id))
-      const operations = planSpriteVersionReplacement(clips, replacements)
-      if (operations.length > MAX_PNGTUBER_REPLACEMENTS) {
-        throw new Error(`Sprite replacement would touch ${operations.length} clips; narrow clip_ids below the ${MAX_PNGTUBER_REPLACEMENTS} operation safety cap.`)
-      }
+      const operations = buildSpriteReplacementPlan(getProject(), args)
       return {
         replacement_count: operations.length,
         operations,
         mutation_applied: false,
+        preserves_timing_and_clip_properties: true,
+      }
+    },
+  },
+  {
+    name: 'propose_pngtuber_sprite_replacement',
+    description: 'Create a stale-safe review proposal for explicit PNGTuber sprite-version replacements. This validates the same exact old→new asset mappings as the planner, builds setAsset edits, previews their before/after clip changes and project fingerprint, and does not mutate the live timeline. Apply only through the existing approved-proposal path after review.',
+    inputSchema: spriteReplacementSchema(),
+    run: async args => {
+      const project = getProject()
+      const operations = buildSpriteReplacementPlan(project, args)
+      const sequenceId = project.sequence?.id ?? 'main'
+      const patch = {
+        format: 'lumen-ai-patch' as const,
+        version: 1 as const,
+        projectId: project.id,
+        edits: operations.map(operation => ({
+          op: 'setAsset' as const,
+          sequenceId,
+          clipId: operation.clipId,
+          assetId: operation.replacementAssetId,
+        })),
+      }
+      const proposal = previewAnimeAiPatch(project, patch)
+      return {
+        replacement_count: operations.length,
+        proposal,
+        mutation_applied: false,
+        requires_approval: true,
         preserves_timing_and_clip_properties: true,
       }
     },
