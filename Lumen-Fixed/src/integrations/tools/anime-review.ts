@@ -1,7 +1,11 @@
-/** Anime review AI tools: reliable IDs and nested timeline inventory. */
+/** Anime review AI tools: reliable IDs, nested timeline inventory and bounded project memory. */
 import { getProject, useEditor } from '@/editor/store'
 import { inspectTimelines, listTimelineMarkers } from '@/editor/anime-timeline-operations'
-import { obj, str, num, oneOf, type AgentTool } from './kit'
+import { desktop } from '@/lib/platform'
+import { flushContextBankWrites } from '@/project/context-bank-runtime'
+import { useSession } from '@/project/session'
+import { makeContextBankQuery } from './context-bank-query'
+import { obj, str, num, int, oneOf, type AgentTool } from './kit'
 
 export const ANIME_REVIEW_TOOLS: AgentTool[] = [
   {
@@ -49,5 +53,25 @@ export const ANIME_REVIEW_TOOLS: AgentTool[] = [
       if (!result.ok) throw new Error(result.error)
       return { ok: true, ...result.result as object, undoable: true }
     },
-  }
+  },
+  {
+    name: 'query_context_bank',
+    description: 'Retrieve a compact, persistent slice of project context already learned by Lumen: current timeline clips/markers, source identities and recent committed edits. Use it before making or refining an edit decision instead of re-inspecting the whole project. Prefer a narrow timeline range. This reads cached context only; it does not analyse media.',
+    inputSchema: obj({
+      purpose: str('What decision this context is for, e.g. “refine the narration cut after this sentence”. Keep it specific.'),
+      sequence_id: str('Optional exact timeline ID. Omit to query across timelines.'),
+      start_frame: int('Optional inclusive start frame of the relevant timeline range.', { minimum: 0 }),
+      end_frame: int('Optional exclusive end frame; must be after start_frame when both are supplied.', { minimum: 0 }),
+      max_items: int('Optional result-item budget. Defaults to 80 and is hard-capped at 200.', { minimum: 1, maximum: 200 }),
+      max_characters: int('Optional serialized context budget. Defaults to 12000 and is hard-capped at 28000.', { minimum: 500, maximum: 28000 }),
+    }, ['purpose']),
+    run: async args => {
+      if (!desktop) throw new Error('The Context Bank needs the Lumen desktop app.')
+      const request = makeContextBankQuery(args, useSession.getState().path, getProject().id)
+      // A tool call can follow an edit immediately. Wait for the mutation stream so
+      // the model never reads the bank one revision behind the canonical timeline.
+      await flushContextBankWrites()
+      return desktop.contextBank.query(request)
+    },
+  },
 ]
