@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Project } from './types'
-import { applyReviewProposal, createReviewProposal } from './anime-review-approval'
+import { previewAnimeAiPatch, verifyApprovedProposal } from './anime-review-approval'
 import { planMouthSync, planSpriteVersionReplacement } from './anime-pngtuber-sync'
 
 describe('anime PNGTuber mouth planner', () => {
@@ -28,22 +28,27 @@ describe('anime PNGTuber mouth planner', () => {
     const project = {
       id: 'project-1',
       clips: {
-        clip1: { id: 'clip1', assetId: 'old', start: 42, duration: 90, opacity: 0.75 },
+        clip1: { id: 'clip1', assetId: 'old', trackId: 'video-1', start: 42, duration: 90, opacity: 0.75 },
       },
       assets: { old: { id: 'old' }, new: { id: 'new' } },
       markers: [],
+      tracks: [{ id: 'video-1', kind: 'video', locked: false }],
       sequences: {},
     } as unknown as Project
-    const proposal = createReviewProposal(project, 'Upgrade PNGTuber sprites to B', [
-      { op: 'setAsset', clipId: 'clip1', assetId: 'new' },
-    ])
+    const patch = {
+      format: 'lumen-ai-patch' as const,
+      version: 1 as const,
+      projectId: 'project-1',
+      edits: [{ op: 'setAsset' as const, sequenceId: 'main', clipId: 'clip1', assetId: 'new' }],
+    }
 
-    const result = applyReviewProposal(project, proposal)
+    const proposal = previewAnimeAiPatch(project, patch)
+    const result = verifyApprovedProposal(project, proposal)
 
-    expect(result.project.clips.clip1.assetId).toBe('new')
-    expect(result.project.clips.clip1.start).toBe(42)
-    expect(result.project.clips.clip1.duration).toBe(90)
-    expect(result.project.clips.clip1.opacity).toBe(0.75)
+    expect(result.clips.clip1.assetId).toBe('new')
+    expect(result.clips.clip1.start).toBe(42)
+    expect(result.clips.clip1.duration).toBe(90)
+    expect(result.clips.clip1.opacity).toBe(0.75)
   })
   it('rejects invalid sync thresholds', () => {
     expect(() => planMouthSync({ peaks: [], peaksPerSecond: 10 },
