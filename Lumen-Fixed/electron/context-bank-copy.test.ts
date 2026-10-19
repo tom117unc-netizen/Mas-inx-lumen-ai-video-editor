@@ -13,14 +13,23 @@ function root() {
   return value
 }
 
-function mirror(projectId: string, revision: number): ContextBankMirror {
+function mirror(projectId: string, revision: number, source?: string): ContextBankMirror {
+  const assets: ContextBankMirror['assets'] = []
+  if (source) {
+    const stat = fs.statSync(source)
+    assets.push({
+      id: 'asset-1', name: 'Narration', kind: 'audio', duration: 10, hasAudio: true,
+      path: source, fileName: path.basename(source), mime: 'audio/wav', size: stat.size,
+      mtime: Math.round(stat.mtimeMs), missing: false,
+    })
+  }
   return {
     format: CONTEXT_BANK_MIRROR_FORMAT,
     version: CONTEXT_BANK_MIRROR_VERSION,
     projectId,
     projectName: 'Copy test',
     revision,
-    assets: [],
+    assets,
     sequences: [{ id: 'main', name: 'Main', fps: 30, clips: [], markers: [] }],
   }
 }
@@ -52,6 +61,48 @@ describe('Context Bank Save As copy', () => {
       try {
         expect(target.status()).toMatchObject({ projectId: 'project-1', revision: 5, editEventCount: 1 })
         expect(source.status()).toMatchObject({ projectId: 'project-1', revision: 5, editEventCount: 1 })
+      } finally {
+        target.close()
+      }
+    } finally {
+      source.close()
+    }
+  })
+
+  it('keeps reusable source transcripts in the copied bank', () => {
+    const base = root()
+    const sourceProject = path.join(base, 'old', 'review.lumen')
+    const targetProject = path.join(base, 'new', 'review-copy.lumen')
+    fs.mkdirSync(path.dirname(sourceProject), { recursive: true })
+    const media = path.join(path.dirname(sourceProject), 'narration.wav')
+    fs.writeFileSync(media, Buffer.from('narration-source'))
+    const source = openContextBank(sourceProject, 'project-1')
+    try {
+      source.sync({ projectPath: sourceProject, mirror: mirror('project-1', 5, media) })
+      source.putTranscript({
+        projectPath: sourceProject,
+        projectId: 'project-1',
+        assetId: 'asset-1',
+        provider: 'elevenlabs',
+        model: 'scribe_v2',
+        language: 'en',
+        analysisVersion: 'scribe_v2-word-v1',
+        words: [{ start: 0, end: 0.4, text: 'Remembered' }],
+        segments: [{ start: 0, end: 0.4, text: 'Remembered' }],
+        createdAt: 100,
+      })
+      copyContextBankForSaveAs('project-1', sourceProject, targetProject)
+      const target = openContextBank(targetProject, 'project-1')
+      try {
+        const result = target.getTranscript({
+          projectPath: targetProject,
+          projectId: 'project-1',
+          assetId: 'asset-1',
+          maxWords: 20,
+          maxSegments: 20,
+          maxCharacters: 10_000,
+        })
+        expect(result).toMatchObject({ found: true, words: [{ start: 0, end: 0.4, text: 'Remembered' }] })
       } finally {
         target.close()
       }
