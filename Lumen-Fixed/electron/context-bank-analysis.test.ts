@@ -66,11 +66,14 @@ describe('Context Bank source transcripts', () => {
     fs.writeFileSync(source, Buffer.from('fake-wave-data-for-fingerprint'))
 
     const first = openContextBank(projectPath, 'project-1')
-    first.sync({ projectPath, mirror: sourceMirror('project-1', source) })
-    const written = first.putTranscript(request(projectPath, 'project-1'))
-    expect(written).toMatchObject({ found: true, projectId: 'project-1', assetId: 'asset-1', provider: 'elevenlabs', model: 'scribe_v2' })
-    expect(written.words).toEqual(request(projectPath, 'project-1').words)
-    first.close()
+    try {
+      first.sync({ projectPath, mirror: sourceMirror('project-1', source) })
+      const written = first.putTranscript(request(projectPath, 'project-1'))
+      expect(written).toMatchObject({ found: true, projectId: 'project-1', assetId: 'asset-1', provider: 'elevenlabs', model: 'scribe_v2' })
+      expect(written.words).toEqual(request(projectPath, 'project-1').words)
+    } finally {
+      first.close()
+    }
 
     const db = new DatabaseSync(contextBankPath(projectPath, 'project-1'), { readOnly: true })
     try {
