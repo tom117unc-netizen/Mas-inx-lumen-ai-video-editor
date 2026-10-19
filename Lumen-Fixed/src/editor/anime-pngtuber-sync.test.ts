@@ -3,7 +3,7 @@ import { createClip, createTrack } from './defaults'
 import { createEmptyProject } from './new-project'
 import { previewAnimeAiPatch, verifyApprovedProposal } from './anime-review-approval'
 import { applyAiPatch } from './project-patches'
-import { planMouthSync, planSpriteVersionReplacement } from './anime-pngtuber-sync'
+import { materializeMouthSyncClips, planMouthSync, planSpriteVersionReplacement } from './anime-pngtuber-sync'
 
 describe('anime PNGTuber mouth planner', () => {
   it('covers the whole clip without gaps and respects timeline offsets', () => {
@@ -20,6 +20,34 @@ describe('anime PNGTuber mouth planner', () => {
       { timelineStartFrame: 0, durationFrames: 10, sourceInSeconds: 1 },
       { fps: 10, smoothingMs: 0 })
     expect(result[0].state).toBe('open')
+  })
+  it('materializes exact mouth intervals using reference sprite styling without repeating time animations', () => {
+    const reference = createClip({ id: 'reference', kind: 'image', assetId: 'closed', trackId: 'reference-track', start: 20, duration: 90, transform: { x: 120, y: -40, scale: 0.8, opacity: 0.75 } })
+    reference.effects = [{ id: 'glow-1', kind: 'glow', enabled: true, amount: 20 }]
+    reference.keyframes = { x: [{ frame: 0, value: 0, easing: 'linear' }, { frame: 30, value: 50, easing: 'linear' }] }
+    reference.transitionIn = { kind: 'dissolve', duration: 5 }
+    reference.animation.in = { preset: 'fade', duration: 6 }
+    const clips = materializeMouthSyncClips([
+      { startFrame: 100, endFrame: 110, state: 'closed' },
+      { startFrame: 110, endFrame: 125, state: 'open' },
+    ], reference, {
+      destinationTrackId: 'mouth-track', closedAssetId: 'closed', openAssetId: 'open', clipIds: ['mouth-1', 'mouth-2'],
+    })
+    expect(clips.map(c => ({ id: c.id, start: c.start, duration: c.duration, assetId: c.assetId }))).toEqual([
+      { id: 'mouth-1', start: 100, duration: 10, assetId: 'closed' },
+      { id: 'mouth-2', start: 110, duration: 15, assetId: 'open' },
+    ])
+    expect(clips[0].trackId).toBe('mouth-track')
+    expect(clips[0].transform).toEqual(reference.transform)
+    expect(clips[0].effects).toEqual(reference.effects)
+    expect(clips[0].effects).not.toBe(reference.effects)
+    expect(clips[0].inPoint).toBe(0)
+    expect(clips[0].speed).toBe(1)
+    expect(clips[0].reverse).toBe(false)
+    expect(clips[0].transitionIn).toBeNull()
+    expect(clips[0].keyframes).toEqual({})
+    expect(clips[0].animation.in.preset).toBe('none')
+    expect(() => materializeMouthSyncClips([{ startFrame: 5, endFrame: 5, state: 'open' }], reference, { destinationTrackId: 'mouth-track', closedAssetId: 'closed', openAssetId: 'open', clipIds: ['bad'] })).toThrow(/interval/i)
   })
   it('preserves sprite clip identity when planning version replacements', () => {
     expect(planSpriteVersionReplacement([{ id: 'clip1', assetId: 'old' }], { old: 'new' })).toEqual([
