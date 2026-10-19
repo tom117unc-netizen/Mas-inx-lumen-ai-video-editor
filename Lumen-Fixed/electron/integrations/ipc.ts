@@ -1,4 +1,5 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { ANIME_CATALOG_QUERY_MAX } from '../../shared/anime-catalog'
 import { IPC, type BlenderRenderRequest, type ImageGenRequest, type McpServerConfig, type MotionRenderRequest, type Provenance, type VideoGenRequest } from '../../shared/integrations'
 import { detectBlender, renderBlender, runLive, setBlenderPath } from './blender'
 import { renderMotion } from './hyperframes'
@@ -17,6 +18,7 @@ import { listModels, providerStates, setProvider } from './ai/providers'
 import { transcribeWithOpenAI } from './ai/transcribe'
 import { generateImage, generateVideo, mediaModels } from './ai/media-gen'
 import { cleanTarget, PROVIDERS, type AgentRunRequest, type LocalAgentId, type ProviderId } from '../../shared/ai'
+import { resolveAnimeCatalog } from './anime-catalog'
 
 /**
  * The integration IPC surface. Only the editor's own page may call it —
@@ -90,6 +92,11 @@ export function registerIntegrationIpc(isTrustedUrl: (url: string) => boolean) {
     return screenshotPage(String(url), { width: Number(o.width) || undefined, height: Number(o.height) || undefined, fullPage: o.fullPage === true })
   })
   handle(IPC.webPreview, (url: string) => linkPreview(String(url)))
+  handle(IPC.animeCatalogResolve, (query: unknown) => {
+    const title = typeof query === 'string' ? query.trim().slice(0, ANIME_CATALOG_QUERY_MAX) : ''
+    if (!title) throw new Error('Anime title is required')
+    return resolveAnimeCatalog(title)
+  })
 
   const skillSource = (s: unknown) => {
     if (s !== 'user' && s !== 'claude') throw new Error('Unknown skill source')
