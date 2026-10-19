@@ -38,6 +38,13 @@ export function sidecarToolText(toolText: string, observation: VisionSidecarObse
   return `${toolText}\n\nVISUAL EVIDENCE FROM VISION SIDECAR:\n${observation.summary}\n\nTIMESTAMPED FRAMES:\n${frames || '- No reliable frame observations returned.'}${uncertainty}`
 }
 
+export function sidecarFailureReason(err: unknown) {
+  const raw = err instanceof Error ? err.message : String(err)
+  const redacted = raw.replace(/(?:api[-_ ]?key|authorization|token|secret|credential|password)\s*[:=]?\s*(?:bearer\s+)?[^\s,;]+/gi, '[redacted]')
+  const status = raw.match(/\b(?:400|401|403|404|408|409|415|422|429|5\d\d)\b/)?.[0]
+  return `Vision sidecar failed${status ? ` (${status})` : ''}: ${redacted.slice(0, 500)}`
+}
+
 export function visionFailureToolText(toolText: string, reason: string) {
   return `${toolText}\n\nVISUAL INSPECTION FAILED: ${reason}\nDo not infer visual facts, composition, subjects, actions, readable text, or suitability from the timeline/tool metadata alone. Use another visual inspection route or report that visual evidence is unavailable.`
 }
