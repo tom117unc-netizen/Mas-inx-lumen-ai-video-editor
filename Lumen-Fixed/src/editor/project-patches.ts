@@ -10,7 +10,7 @@ export type AiEdit =
   | { op: 'setTransform'; sequenceId: string; clipId: string; transform: Partial<Clip['transform']> }
   | { op: 'setAudio'; sequenceId: string; clipId: string; audio: Partial<Clip['audio']> }
   | { op: 'setTrack'; sequenceId: string; trackId: string; changes: Partial<Pick<Track, 'muted' | 'hidden' | 'solo'>> }
-  | { op: 'addClip'; sequenceId: string; clip: Clip }
+  | { op: 'addClip'; sequenceId: string; clipId: string; clip: Clip }
 
 export interface AiPatch { format: 'lumen-ai-patch'; version: 1; projectId: string; edits: AiEdit[] }
 export interface PatchResult { project: Project; changes: string[]; warnings: string[] }
@@ -45,6 +45,7 @@ export function applyAiPatch(original: Project, patch: AiPatch): PatchResult {
     if (edit.op === 'addClip') {
       const clip = edit.clip
       if (!clip || typeof clip !== 'object' || !clip.id) throw new Error('Invalid clip')
+      if (edit.clipId !== clip.id) throw new Error('Added clip ID does not match clip payload')
       if (seq.clips[clip.id]) throw new Error(`Clip already exists (duplicate ID): ${clip.id}`)
       const track = seq.tracks.find(t => t.id === clip.trackId)
       if (!track) throw new Error(`Unknown track: ${clip.trackId}`)
