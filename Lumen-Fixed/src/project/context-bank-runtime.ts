@@ -1,5 +1,8 @@
 import { getProject, subscribeCommittedEdits, useEditor } from '@/editor/store'
+import type { Project } from '@/editor/types'
+import { api as integrationsApi } from '@/integrations/store'
 import { desktop } from '@/lib/platform'
+import { seedAnimeResearchForProject } from './anime-research'
 import { useSession } from './session'
 import { createContextBankSynchronizer, type ContextBankSynchronizer } from './context-bank-sync'
 
@@ -20,6 +23,23 @@ export function contextBankPathAction(
     && previousProjectId === currentProjectId
   ) return 'copy'
   return 'reconcile'
+}
+
+/**
+ * A durable path is the hard boundary for project-local Context Bank work.
+ * Reconcile first so research status always reads from an initialized/current
+ * bank; only anime-review projects proceed to network-backed research seeding.
+ */
+export async function runAnimeResearchAfterContextBankSync(
+  project: Project,
+  projectPath: string | null,
+  reconcile: () => Promise<void>,
+  seed: (project: Project, projectPath: string) => Promise<unknown>,
+) {
+  if (!projectPath) return
+  await reconcile()
+  if (!project.animeReview?.showQuery) return
+  await seed(project, projectPath)
 }
 
 let started = false
@@ -49,6 +69,20 @@ export function startContextBankRuntime() {
   )
   activeSynchronizer = synchronizer
 
+  const seed = async (project: Project, projectPath: string) => {
+    if (!desktop?.contextBank || !integrationsApi) return
+    // The path may have changed while a queued Context Bank write was finishing.
+    // Avoid spending network work on a project that is no longer active.
+    if (getProject().id !== project.id || useSession.getState().path !== projectPath) return
+    await seedAnimeResearchForProject(project, projectPath, {
+      bank: desktop.contextBank,
+      integrations: integrationsApi,
+    })
+  }
+
+  const reconcileAndResearch = (project: Project, projectPath: string | null) =>
+    runAnimeResearchAfterContextBankSync(project, projectPath, () => synchronizer.reconcile(), seed)
+
   let previousProjectId = getProject().id
   let sawLoad = false
 
@@ -58,7 +92,9 @@ export function startContextBankRuntime() {
       // loadProject fires before session.ts changes `path`. Defer reconciliation
       // until the current call stack has installed the new session state.
       queueMicrotask(() => {
-        if (useSession.getState().path) void synchronizer.reconcile().catch(() => {})
+        const project = getProject()
+        const path = useSession.getState().path
+        if (path) void reconcileAndResearch(project, path).catch(error => console.warn('Anime research initialization failed', error))
       })
       return
     }
@@ -67,7 +103,8 @@ export function startContextBankRuntime() {
 
   useSession.subscribe((state, previous) => {
     if (state.path === previous.path) return
-    const currentProjectId = getProject().id
+    const project = getProject()
+    const currentProjectId = project.id
     const action = contextBankPathAction(previous.path, state.path, previousProjectId, currentProjectId, sawLoad)
     const from = previous.path
     const to = state.path
@@ -77,10 +114,10 @@ export function startContextBankRuntime() {
 
     if (action === 'copy' && from && to) {
       void synchronizer.copyForSaveAs(from, to)
-        .then(() => synchronizer.reconcile())
-        .catch(() => {})
+        .then(() => reconcileAndResearch(project, to))
+        .catch(error => console.warn('Context Bank Save As initialization failed', error))
     } else if (action === 'reconcile' && to && !loaded) {
-      void synchronizer.reconcile().catch(() => {})
+      void reconcileAndResearch(project, to).catch(error => console.warn('Context Bank initialization failed', error))
     }
   })
 }
