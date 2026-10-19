@@ -12,6 +12,7 @@ const EXPECTED_TOOLS = [
   'get_show_research_status',
   'search_show_research',
   'record_research_prior',
+  'plan_source_scene_search',
 ]
 
 describe('ANIME_REVIEW_TOOLS', () => {
