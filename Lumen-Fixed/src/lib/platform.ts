@@ -28,6 +28,9 @@ const bridge = typeof window !== 'undefined' ? window.lumen : undefined
 /** Files, projects and exports (undefined outside the desktop app). */
 export const desktop: AppAPI | undefined = bridge?.app
 
+/** Trusted desktop integrations (undefined outside the desktop app). */
+export const integrations: IntegrationsAPI | undefined = bridge?.integrations
+
 /** The version baked in at build time from package.json. */
 export const APP_VERSION: string = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.0.0'
 
