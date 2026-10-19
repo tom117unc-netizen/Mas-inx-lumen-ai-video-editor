@@ -181,7 +181,7 @@ async function barrier() {
 export const CONTEXT_BANK_RESEARCH_TOOLS: AgentTool[] = [
   {
     name: 'configure_anime_review_project',
-    description: 'Configure an existing saved Lumen project as an anime/show review using an explicit show title, then initialize or refresh its project-local research cache. Never infers the show from the project name. Reusing the same query preserves resolved identity; changing the query drops stale identity and reseeds research for the new show.',
+    description: 'Configure an existing saved Lumen project as an anime/show review using an explicit show title, then initialize or refresh its project-local research cache. Never infers the show from the project name. Reusing the same query preserves resolved identity while explicitly refreshing the bounded research pack; changing the query drops stale identity and reseeds research for the new show.',
     inputSchema: obj({
       show_query: str('Exact anime/show title to attach to this existing project.', { maxLength: 300 }),
     }, ['show_query']),
@@ -209,6 +209,7 @@ export const CONTEXT_BANK_RESEARCH_TOOLS: AgentTool[] = [
             bank: desktop.contextBank,
             integrations: desktopIntegrations,
             allowRetry: true,
+            refreshReady: true,
           })
         : await seedAnimeResearchForProject(project, projectPath)
       recordResolvedAnimeResearchIdentity(project, research)
