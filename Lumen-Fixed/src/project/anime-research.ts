@@ -162,21 +162,50 @@ function splitPageIntoChunks(sourceId: string, text: string): Omit<ContextBankRe
 }
 
 async function collectUniqueSearchResults(integrations: IntegrationsAPI, queries: readonly string[], wait: ResearchSleep) {
-  const found = new Map<string, WebSearchResult>()
-  for (const query of queries.slice(0, SEARCH_LIMIT)) {
-    let results: WebSearchResult[]
+  const boundedQueries = queries.slice(0, SEARCH_LIMIT)
+  const batches: WebSearchResult[][] = []
+
+  for (const query of boundedQueries) {
     try {
-      results = await withTransientRetry(() => integrations.web.search(query, 8), wait)
+      batches.push(await withTransientRetry(() => integrations.web.search(query, 8), wait))
     } catch {
-      continue
-    }
-    for (const result of results) {
-      const url = normalizedUrl(result.url)
-      if (!url || found.has(url)) continue
-      found.set(url, { ...result, url })
-      if (found.size >= PAGE_LIMIT) return [...found.values()]
+      batches.push([])
     }
   }
+
+  const found = new Map<string, WebSearchResult>()
+  const perQueryReserve = Math.max(1, Math.floor(PAGE_LIMIT / Math.max(1, boundedQueries.length)))
+
+  const add = (result: WebSearchResult) => {
+    const url = normalizedUrl(result.url)
+    if (!url || found.has(url) || found.size >= PAGE_LIMIT) return false
+    found.set(url, { ...result, url })
+    return true
+  }
+
+  // First pass: reserve a small share of the bounded source pack for every
+  // successful query, so a broad character/overview search cannot starve later
+  // episode-guide and episode-summary searches that provide locator evidence.
+  for (const results of batches) {
+    let added = 0
+    for (const result of results) {
+      if (add(result)) added += 1
+      if (added >= perQueryReserve || found.size >= PAGE_LIMIT) break
+    }
+  }
+
+  // Second pass: fill any unused capacity deterministically from the remaining
+  // results without exceeding the existing source bound.
+  if (found.size < PAGE_LIMIT) {
+    for (const results of batches) {
+      for (const result of results) {
+        add(result)
+        if (found.size >= PAGE_LIMIT) break
+      }
+      if (found.size >= PAGE_LIMIT) break
+    }
+  }
+
   return [...found.values()]
 }
 
