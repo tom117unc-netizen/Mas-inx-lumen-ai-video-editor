@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildVisionSidecarPrompt, parseVisionSidecarObservation, sidecarToolText } from './vision-sidecar'
+import { buildVisionSidecarPrompt, parseVisionSidecarObservation, selectVisionSidecar, sidecarToolText } from './vision-sidecar'
 
 describe('vision sidecar evidence', () => {
   it('replaces unavailable pictures with detailed timestamp-preserving visual evidence', () => {
@@ -36,5 +36,15 @@ describe('vision sidecar evidence', () => {
     expect(prompt).toContain('sensitive')
     expect(prompt).toContain('uncertainty')
     expect(prompt).toContain('JSON')
+  })
+
+  it('prefers the provider default vision trait and otherwise chooses a vision model', () => {
+    const models = [
+      { id: 'deepseek-v3-2', name: 'DeepSeek', vision: false },
+      { id: 'vision-a', name: 'Vision A', vision: true, context: 128000 },
+      { id: 'vision-b', name: 'Vision B', vision: true, context: 1000000 },
+    ]
+    expect(selectVisionSidecar(models, 'vision-a')?.id).toBe('vision-a')
+    expect(selectVisionSidecar(models, 'missing')?.id).toBe('vision-b')
   })
 })
