@@ -62,45 +62,72 @@ function api(search: IntegrationsAPI['web']['search'], read: IntegrationsAPI['we
   } as unknown as IntegrationsAPI
 }
 
+async function seedFromText(text: string) {
+  const contextBank = bank()
+  const search = vi.fn(async (query: string) => query.includes('episode guide')
+    ? [{
+        title: 'List of Recently, My Sister is Unusual episodes - Wikipedia',
+        url: 'https://en.wikipedia.org/wiki/List_of_Recently,_My_Sister_is_Unusual_episodes',
+        snippet: 'Episode guide',
+      }]
+    : [])
+  const read = vi.fn(async (url: string) => ({
+    url,
+    title: 'List of Recently, My Sister is Unusual episodes - Wikipedia',
+    site: 'Wikipedia',
+    text,
+    links: [],
+    images: [],
+  }))
+
+  const result = await seedAnimeResearchForProject(project(), projectPath, {
+    bank: contextBank,
+    integrations: api(search as IntegrationsAPI['web']['search'], read as IntegrationsAPI['web']['read']),
+    now: () => 20,
+  })
+
+  expect(result).toMatchObject({ status: 'ready' })
+  return vi.mocked(contextBank.replaceResearchSeed).mock.calls[0]?.[0]
+}
+
 describe('anime research Wikipedia episode rows', () => {
   it('splits flattened Wikipedia episode-table rows whose episode number is a bare leading number before the quoted title', async () => {
-    const contextBank = bank()
-    const search = vi.fn(async (query: string) => query.includes('episode guide')
-      ? [{
-          title: 'List of Recently, My Sister is Unusual episodes - Wikipedia',
-          url: 'https://en.wikipedia.org/wiki/List_of_Recently,_My_Sister_is_Unusual_episodes',
-          snippet: 'No. Title Original release date',
-        }]
-      : [])
-    const read = vi.fn(async (url: string) => ({
-      url,
-      title: 'List of Recently, My Sister is Unusual episodes - Wikipedia',
-      site: 'Wikipedia',
-      text: [
-        '## Anime',
-        'No.Title Original release date',
-        '1"Mitsuki SOS"',
-        'Transliteration: "Mitsuki SOS" January 4, 2014',
-        'Mitsuki meets Hiyori and discovers the heart-shaped belt.',
-        '2"Shining Amidst the Storm"',
-        'Transliteration: "Arashi no Naka de Kagayaite" January 11, 2014',
-        'Mitsuki asks Hiyori who she is, then sees the golden gate while the heart on the belt fills.',
-        '3"Heavy-Hanging Fruit"',
-        'Transliteration: "Tawawana Kaijitsu" January 18, 2014',
-        'Mitsuki and Hiyori deal with the next complication.',
-      ].join('\n'),
-      links: [],
-      images: [],
-    }))
+    const request = await seedFromText([
+      '## Anime',
+      'No.Title Original release date',
+      '1"Mitsuki SOS"',
+      'Transliteration: "Mitsuki SOS" January 4, 2014',
+      'Mitsuki meets Hiyori and discovers the heart-shaped belt.',
+      '2"Shining Amidst the Storm"',
+      'Transliteration: "Arashi no Naka de Kagayaite" January 11, 2014',
+      'Mitsuki asks Hiyori who she is, then sees the golden gate while the heart on the belt fills.',
+      '3"Heavy-Hanging Fruit"',
+      'Transliteration: "Tawawana Kaijitsu" January 18, 2014',
+      'Mitsuki and Hiyori deal with the next complication.',
+    ].join('\n'))
 
-    const result = await seedAnimeResearchForProject(project(), projectPath, {
-      bank: contextBank,
-      integrations: api(search as IntegrationsAPI['web']['search'], read as IntegrationsAPI['web']['read']),
-      now: () => 20,
-    })
+    const episode1 = request?.chunks.find(chunk => chunk.episodeNumber === 1)
+    const episode2 = request?.chunks.find(chunk => chunk.episodeNumber === 2)
+    const episode3 = request?.chunks.find(chunk => chunk.episodeNumber === 3)
 
-    expect(result).toMatchObject({ status: 'ready' })
-    const request = vi.mocked(contextBank.replaceResearchSeed).mock.calls[0]?.[0]
+    expect(episode1).toMatchObject({ heading: 'Episode 1' })
+    expect(episode2).toMatchObject({ heading: 'Episode 2' })
+    expect(episode3).toMatchObject({ heading: 'Episode 3' })
+    expect(episode1?.text).toContain('heart-shaped belt')
+    expect(episode1?.text).not.toContain('Shining Amidst the Storm')
+    expect(episode2?.text).toContain('golden gate')
+    expect(episode2?.text).not.toContain('Heavy-Hanging Fruit')
+  })
+
+  it('splits serialized Wikipedia episode records when EpisodeNumber fields appear inside one flattened block', async () => {
+    const request = await seedFromText([
+      '[',
+      '{"EpisodeNumber":"1","Title":"Mitsuki SOS","Summary":"Mitsuki meets Hiyori and discovers the heart-shaped belt."},',
+      '{"EpisodeNumber":"2","Title":"Shining Amidst the Storm","Summary":"Mitsuki asks Hiyori who she is, then sees the golden gate while the heart on the belt fills."},',
+      '{"EpisodeNumber":"3","Title":"Heavy-Hanging Fruit","Summary":"Mitsuki and Hiyori deal with the next complication."}',
+      ']',
+    ].join(''))
+
     const episode1 = request?.chunks.find(chunk => chunk.episodeNumber === 1)
     const episode2 = request?.chunks.find(chunk => chunk.episodeNumber === 2)
     const episode3 = request?.chunks.find(chunk => chunk.episodeNumber === 3)
