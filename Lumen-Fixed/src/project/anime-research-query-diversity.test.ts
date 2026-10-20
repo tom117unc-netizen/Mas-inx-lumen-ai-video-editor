@@ -183,4 +183,46 @@ describe('anime research query diversity', () => {
     expect(episodeChunk?.text).toBe(longEpisodeLine.trim())
     expect(episodeChunk?.text.length).toBeGreaterThan(500)
   })
+
+  it('splits a single episode-list block into separate episode-numbered chunks', async () => {
+    const contextBank = bank()
+    const search = vi.fn(async (query: string) => query.includes('episode guide')
+      ? [{ title: 'Episode guide', url: 'https://episodes.example/multi', snippet: 'Episodes 1 to 3' }]
+      : [])
+    const read = vi.fn(async (url: string) => ({
+      url,
+      title: 'Episode guide',
+      site: 'episodes.example',
+      text: [
+        'Episode 1',
+        'Mitsuki meets Hiyori and discovers the heart-shaped belt.',
+        'Episode 2',
+        'Hiyori explains the golden gate and the heart filling the next step.',
+        'Episode 3',
+        'Mitsuki deals with the next complication.',
+      ].join('\n'),
+      links: [],
+      images: [],
+    }))
+
+    const result = await seedAnimeResearchForProject(project(), projectPath, {
+      bank: contextBank,
+      integrations: api(search as IntegrationsAPI['web']['search'], read as IntegrationsAPI['web']['read']),
+      now: () => 13,
+    })
+
+    expect(result).toMatchObject({ status: 'ready' })
+    const request = vi.mocked(contextBank.replaceResearchSeed).mock.calls[0]?.[0]
+    const episode1 = request?.chunks.find(chunk => chunk.episodeNumber === 1)
+    const episode2 = request?.chunks.find(chunk => chunk.episodeNumber === 2)
+    const episode3 = request?.chunks.find(chunk => chunk.episodeNumber === 3)
+
+    expect(episode1).toMatchObject({ heading: 'Episode 1' })
+    expect(episode2).toMatchObject({ heading: 'Episode 2' })
+    expect(episode3).toMatchObject({ heading: 'Episode 3' })
+    expect(episode1?.text).toContain('heart-shaped belt')
+    expect(episode1?.text).not.toContain('Episode 2')
+    expect(episode2?.text).toContain('golden gate')
+    expect(episode2?.text).not.toContain('Episode 3')
+  })
 })
