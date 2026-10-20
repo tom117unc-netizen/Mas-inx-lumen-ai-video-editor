@@ -133,10 +133,16 @@ function explicitEpisodeNumber(text: string) {
   return Number.isInteger(value) && value > 0 ? value : undefined
 }
 
-function leadingEpisodeNumber(text: string) {
-  const match = /^[^\p{L}\p{N}]{0,24}(?:episode|ep\.?)[\s#:.-]*(\d{1,5})(?=\b|\s)/iu.exec(text)
-  if (!match) return undefined
-  const value = Number(match[1])
+function leadingEpisodeNumber(text: string, allowBareNumberTitle = false) {
+  const labelled = /^[^\p{L}\p{N}]{0,24}(?:episode|ep\.?)[\s#:.-]*(\d{1,5})(?=\b|\s)/iu.exec(text)
+  if (labelled) {
+    const value = Number(labelled[1])
+    return Number.isInteger(value) && value > 0 ? value : undefined
+  }
+  if (!allowBareNumberTitle) return undefined
+  const bare = /^\s*(\d{1,5})\s*["“]/u.exec(text)
+  if (!bare) return undefined
+  const value = Number(bare[1])
   return Number.isInteger(value) && value > 0 ? value : undefined
 }
 
@@ -144,6 +150,7 @@ function splitEpisodeSections(text: string): EpisodeSection[] {
   const sections: EpisodeSection[] = []
   let lines: string[] = []
   let episodeNumber: number | undefined
+  const allowBareNumberTitle = /\bNo\.?\s*Title\s+(?:Original\s+)?(?:release|air)\s+date\b/i.test(text)
 
   const push = () => {
     const value = lines.join('\n').trim()
@@ -152,7 +159,7 @@ function splitEpisodeSections(text: string): EpisodeSection[] {
   }
 
   for (const line of text.split(/\r?\n/)) {
-    const nextEpisodeNumber = leadingEpisodeNumber(line)
+    const nextEpisodeNumber = leadingEpisodeNumber(line, allowBareNumberTitle)
     if (nextEpisodeNumber !== undefined) {
       push()
       episodeNumber = nextEpisodeNumber
