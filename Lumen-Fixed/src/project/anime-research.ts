@@ -38,6 +38,7 @@ const SNIPPET_FALLBACK_NOTICE = 'Search-result snippet only; full page could not
 
 type ResearchSleep = (milliseconds: number) => Promise<void>
 type BuiltResearchSource = { source: ContextBankResearchSource; chunks: ContextBankResearchChunk[] }
+type EpisodeSection = { text: string; episodeNumber?: number }
 
 function researchIdentity(candidate: AnimeCatalogCandidate): ContextBankResearchIdentity {
   return {
@@ -132,31 +133,65 @@ function explicitEpisodeNumber(text: string) {
   return Number.isInteger(value) && value > 0 ? value : undefined
 }
 
-function splitPageIntoChunks(sourceId: string, text: string): Omit<ContextBankResearchChunk, 'id'>[] {
-  const paragraphs = text
-    .split(/\n\s*\n+/)
-    .map(part => part.trim())
-    .filter(Boolean)
+function leadingEpisodeNumber(text: string) {
+  const match = /^[^\p{L}\p{N}]{0,24}(?:episode|ep\.?)[\s#:.-]*(\d{1,5})(?=\b|\s)/iu.exec(text)
+  if (!match) return undefined
+  const value = Number(match[1])
+  return Number.isInteger(value) && value > 0 ? value : undefined
+}
 
+function splitEpisodeSections(text: string): EpisodeSection[] {
+  const sections: EpisodeSection[] = []
+  let lines: string[] = []
+  let episodeNumber: number | undefined
+
+  const push = () => {
+    const value = lines.join('\n').trim()
+    if (value) sections.push({ text: value, ...(episodeNumber === undefined ? {} : { episodeNumber }) })
+    lines = []
+  }
+
+  for (const line of text.split(/\r?\n/)) {
+    const nextEpisodeNumber = leadingEpisodeNumber(line)
+    if (nextEpisodeNumber !== undefined) {
+      push()
+      episodeNumber = nextEpisodeNumber
+    }
+    lines.push(line)
+  }
+  push()
+
+  return sections.length ? sections : [{ text }]
+}
+
+function splitPageIntoChunks(sourceId: string, text: string): Omit<ContextBankResearchChunk, 'id'>[] {
   const chunks: Omit<ContextBankResearchChunk, 'id'>[] = []
   let ordinal = 0
 
-  for (const paragraph of paragraphs) {
-    let remaining = paragraph
-    while (remaining && chunks.length < CHUNK_LIMIT) {
-      const piece = remaining.slice(0, CONTEXT_BANK_RESEARCH_CHUNK_TEXT_MAX).trim()
-      if (!piece) break
-      const firstLine = piece.split(/\r?\n/, 1)[0]?.trim()
-      const firstLineEpisodeNumber = firstLine ? explicitEpisodeNumber(firstLine) : undefined
-      const episodeNumber = explicitEpisodeNumber(piece)
-      chunks.push({
-        sourceId,
-        ordinal: ordinal++,
-        ...(firstLineEpisodeNumber === undefined ? {} : { heading: `Episode ${firstLineEpisodeNumber}` }),
-        text: piece,
-        ...(episodeNumber === undefined ? {} : { episodeNumber }),
-      })
-      remaining = remaining.slice(piece.length).trim()
+  for (const section of splitEpisodeSections(text)) {
+    const paragraphs = section.text
+      .split(/\n\s*\n+/)
+      .map(part => part.trim())
+      .filter(Boolean)
+
+    for (const paragraph of paragraphs) {
+      let remaining = paragraph
+      while (remaining && chunks.length < CHUNK_LIMIT) {
+        const piece = remaining.slice(0, CONTEXT_BANK_RESEARCH_CHUNK_TEXT_MAX).trim()
+        if (!piece) break
+        const firstLine = piece.split(/\r?\n/, 1)[0]?.trim()
+        const firstLineEpisodeNumber = section.episodeNumber ?? (firstLine ? explicitEpisodeNumber(firstLine) : undefined)
+        const episodeNumber = section.episodeNumber ?? explicitEpisodeNumber(piece)
+        chunks.push({
+          sourceId,
+          ordinal: ordinal++,
+          ...(firstLineEpisodeNumber === undefined ? {} : { heading: `Episode ${firstLineEpisodeNumber}` }),
+          text: piece,
+          ...(episodeNumber === undefined ? {} : { episodeNumber }),
+        })
+        remaining = remaining.slice(piece.length).trim()
+      }
+      if (chunks.length >= CHUNK_LIMIT) break
     }
     if (chunks.length >= CHUNK_LIMIT) break
   }
