@@ -146,7 +146,35 @@ function leadingEpisodeNumber(text: string, allowBareNumberTitle = false) {
   return Number.isInteger(value) && value > 0 ? value : undefined
 }
 
+function splitSerializedEpisodeSections(text: string): EpisodeSection[] | null {
+  const markers: Array<{ index: number; episodeNumber: number }> = []
+  const pattern = /"EpisodeNumber"\s*:\s*"?(\d{1,5})"?/g
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index
+    const value = Number(match[1])
+    if (index === undefined || !Number.isInteger(value) || value <= 0) continue
+    markers.push({ index, episodeNumber: value })
+  }
+  if (markers.length < 2) return null
+
+  const sections: EpisodeSection[] = []
+  const prefix = text.slice(0, markers[0]!.index).trim()
+  if (prefix) sections.push({ text: prefix })
+
+  for (let index = 0; index < markers.length; index++) {
+    const marker = markers[index]!
+    const end = markers[index + 1]?.index ?? text.length
+    const value = text.slice(marker.index, end).trim()
+    if (value) sections.push({ text: value, episodeNumber: marker.episodeNumber })
+  }
+
+  return sections.length ? sections : null
+}
+
 function splitEpisodeSections(text: string): EpisodeSection[] {
+  const serializedSections = splitSerializedEpisodeSections(text)
+  if (serializedSections) return serializedSections
+
   const sections: EpisodeSection[] = []
   let lines: string[] = []
   let episodeNumber: number | undefined
