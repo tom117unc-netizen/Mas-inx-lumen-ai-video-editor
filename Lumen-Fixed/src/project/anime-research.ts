@@ -96,7 +96,6 @@ function normalizedUrl(value: string) {
 function researchErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
-
 function isTransientResearchError(error: unknown) {
   const message = researchErrorMessage(error).toLowerCase()
   return /\b(?:429|502|503|504)\b/.test(message)
@@ -148,10 +147,10 @@ function leadingEpisodeNumber(text: string, allowBareNumberTitle = false) {
 
 function splitSerializedEpisodeSections(text: string): EpisodeSection[] | null {
   const markers: Array<{ index: number; episodeNumber: number }> = []
-  const pattern = /"EpisodeNumber"\s*:\s*"?(\d{1,5})"?/g
+  const pattern = /"EpisodeNumber"\s*:\s*(?:"?(\d{1,5})"?|\{\s*"wt"\s*:\s*"?(\d{1,5})"?\s*\})/g
   for (const match of text.matchAll(pattern)) {
     const index = match.index
-    const value = Number(match[1])
+    const value = Number(match[1] ?? match[2])
     if (index === undefined || !Number.isInteger(value) || value <= 0) continue
     markers.push({ index, episodeNumber: value })
   }
@@ -297,7 +296,6 @@ async function sourceAndChunks(page: WebPage, retrievedAt: number): Promise<Buil
     contentHash: await sha256(text),
     text,
   }
-
   const rawChunks = splitPageIntoChunks(sourceId, text)
   const chunks: ContextBankResearchChunk[] = []
   for (const chunk of rawChunks) {
