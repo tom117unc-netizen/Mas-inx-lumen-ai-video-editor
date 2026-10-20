@@ -119,13 +119,11 @@ describe('anime research Wikipedia episode rows', () => {
     expect(episode2?.text).not.toContain('Heavy-Hanging Fruit')
   })
 
-  it('splits serialized Wikipedia episode records when EpisodeNumber fields appear inside one flattened block', async () => {
+  it('splits the nested EpisodeNumber wt fields emitted by the real Wikipedia payload', async () => {
     const request = await seedFromText([
-      '[',
-      '{"EpisodeNumber":"1","Title":"Mitsuki SOS","Summary":"Mitsuki meets Hiyori and discovers the heart-shaped belt."},',
-      '{"EpisodeNumber":"2","Title":"Shining Amidst the Storm","Summary":"Mitsuki asks Hiyori who she is, then sees the golden gate while the heart on the belt fills."},',
-      '{"EpisodeNumber":"3","Title":"Heavy-Hanging Fruit","Summary":"Mitsuki and Hiyori deal with the next complication."}',
-      ']',
+      '{"EpisodeNumber":{"wt":"1"},"Title":{"wt":"Mitsuki SOS"},"ShortSummary":{"wt":"Mitsuki meets Hiyori and discovers the heart-shaped belt."}},',
+      '{"EpisodeNumber":{"wt":"2"},"Title":{"wt":"Shining Amidst the Storm"},"ShortSummary":{"wt":"Mitsuki asks Hiyori who she is, then sees the golden gate while the heart on the belt fills."}},',
+      '{"EpisodeNumber":{"wt":"3"},"Title":{"wt":"Heavy-Hanging Fruit"},"ShortSummary":{"wt":"Mitsuki and Hiyori deal with the next complication."}}',
     ].join(''))
 
     const episode1 = request?.chunks.find(chunk => chunk.episodeNumber === 1)
