@@ -376,3 +376,46 @@ it('requires the full context pass first, then reuses identical global-bank look
    summary:'This local section is unplanned because a narrative beat was not established.',
    inspection_ids:[overview.json.inspection_id]})).rejects.toThrow(/story beat/i)
 })
+
+it('publishes an independently editable output sequence without changing the original footage',async()=>{
+ await run('begin_video_construction',{goal:'Turn all permitted original gameplay into an editable source-backed narrative cut'})
+ const clip=Object.values(getProject().clips)[0]
+ const originalId=getProject().sequence?.id??'seq_main'
+ const originalClips=structuredClone(getProject().clips)
+ const first=(await run('get_video_construction') as any)
+ expect(first.source_manifest.source_clips).toBe(1)
+ await run('scan_construction_events',{start_frame:0,end_frame:300})
+ const overview=await run('inspect_video_range',{start_frame:0,end_frame:300,mode:'overview'}) as any
+ await run('update_video_construction',{beats:[{id:'complete',start:0,end:300,kind:'scene',
+   summary:'Maintain the entire original video, including its beginning and final payoff.'}]})
+ await completeTwoPassSections(overview.json.inspection_id)
+ expect((await run('get_video_construction') as any).status.stage).toBe('assemble')
+ await expect(run('publish_keep_first_assembly')).rejects.toThrow(/Select/)
+ await run('record_keep_first_selections',{selections:[{
+   id:'complete-video',start_frame:0,end_frame:300,output_order:0,
+   role:'complete',beat_id:'complete',
+   reason:'Keep the complete game and commentary intact in the first non-destructive version.',
+   inspection_ids:[overview.json.inspection_id],
+ }]})
+ const preview=await run('preview_keep_first_assembly',{name:'Lumen first cut'}) as any
+ expect(preview).toMatchObject({valid:true,original_sequence_id:originalId,output_frames:300})
+ const prior=useEditor.getState().past.length
+ const published=await run('publish_keep_first_assembly',{name:'Lumen first cut'}) as any
+ expect(published).toMatchObject({published:true,original_sequence_id:originalId,output_frames:300,
+   status:{stage:'review',complete:false}})
+ expect(useEditor.getState().past).toHaveLength(prior+1)
+ const project=getProject()
+ expect(project.sequence?.id).toBe(published.sequence_id)
+ expect(project.sequences?.[originalId].clips).toEqual(originalClips)
+ const mapping=project.construction!.assembly!
+ expect(mapping.sourceSequenceId).toBe(originalId)
+ expect(mapping.selections[0]).toMatchObject({sourceStart:0,sourceEnd:300,outputStart:0,outputEnd:300})
+ expect(mapping.clips[0].originalClipId).toBe(clip.id)
+ expect(mapping.clips[0].outputClipId).not.toBe(clip.id)
+ expect(Object.values(project.clips)[0].duration).toBe(300)
+ await expect(run('publish_keep_first_assembly')).rejects.toThrow(/already|published/i)
+ useEditor.getState().undo()
+ expect(getProject().sequence?.id??'seq_main').toBe(originalId)
+ expect(getProject().clips).toEqual(originalClips)
+ expect(getProject().construction?.applied).toBeUndefined()
+})
