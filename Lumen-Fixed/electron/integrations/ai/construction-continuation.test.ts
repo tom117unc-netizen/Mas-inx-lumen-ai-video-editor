@@ -18,6 +18,18 @@ it('continues incomplete work only while it makes bounded progress',async()=>{
  expect(constructionContinuation(snapshot,12).continue).toBe(true)
  expect(constructionContinuation(snapshot,CONSTRUCTION_MAX_BATCHES).continue).toBe(false)
 })
+it('does not waste provider requests while local indexing runs or fails',()=>{
+ const running={status:{stage:'discover',complete:false},indexing:{state:'running',remainingFrames:42000}}
+ const active=constructionContinuation(running,0)
+ expect(active.continue).toBe(false)
+ expect(active.reason).toMatch(/without further AI calls/)
+ const broken=constructionContinuation({...running,indexing:{state:'failed',error:'Media decoder error'}},0)
+ expect(broken.continue).toBe(false)
+ expect(broken.reason).toMatch(/Media decoder error/)
+ const finished=constructionContinuation({...running,status:{stage:'context-bank',complete:false},
+   indexing:{state:'completed',remainingFrames:0}},1)
+ expect(finished.continue).toBe(true)
+})
 it('never continues completed, stale, absent or malformed construction',()=>{
  for(const s of [null,{}, {status:{stage:'complete',complete:true}}, {status:{stage:'stale',complete:false}}]) expect(constructionContinuation(s,0).continue).toBe(false)
 })
