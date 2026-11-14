@@ -115,6 +115,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     run:async a=>{
       const s=state()
       if(s.applied||s.paused)throw new Error('Cannot bank changed or paused footage')
+      if(unscannedDiscoveryRanges(s).length)throw new Error('Finish candidate discovery across the whole original timeline before banking context sections')
       if(!s.sections)throw new Error('Legacy construction has no adaptive section plan')
       const id=z.string().trim().min(1).parse(a.section_id)
       const section=s.sections.context.find(x=>x.id===id)
@@ -160,6 +161,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     run:async a=>{
       const s=state(),p=getProject()
       if(!s.sections)throw new Error('Legacy plan has no timeline-wide section context index')
+      if(s.applied||s.paused)throw new Error('Global edit context is only valid for the original unedited active construction')
       if(s.sections.context.some(c=>!c.indexed))throw new Error('Complete the whole-timeline context banking pass first')
       const id=z.string().trim().min(1).parse(a.section_id)
       const edit=s.sections.editing.find(x=>x.id===id)
@@ -169,17 +171,23 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       if(linked.some(x=>!s.sections!.context.some(c=>c.id===x)))throw new Error('Unknown linked global context section')
       const ids=[...new Set([...(edit.contextIds??[]),...linked])]
       const ranked=selectBankContext(s.sections.context,edit,question,ids,z.number().int().min(1).max(24).parse(a.max_context_items??8))
-      const next=structuredClone(s)
-      next.sections!.reads=[...(next.sections!.reads??[]).filter(r=>r.editSectionId!==id),
-        {editSectionId:id,bankSectionIds:ranked.map(x=>x.section.id),revision:s.revision??0}]
-      await persist(next)
+      const idsFound=ranked.map(x=>x.section.id)
+      const previous=s.sections.reads?.find(r=>r.editSectionId===id)
+      const alreadySaved=previous?.question===question &&
+        JSON.stringify(previous.bankSectionIds)===JSON.stringify(idsFound)
+      if(!alreadySaved) {
+        const next=structuredClone(s)
+        next.sections!.reads=[...(next.sections!.reads??[]).filter(r=>r.editSectionId!==id),
+          {editSectionId:id,bankSectionIds:idsFound,revision:s.revision??0,question}]
+        await persist(next)
+      }
       const clips=Object.values(p.clips).filter(c=>c.assetId&&c.start<edit.end&&c.start+c.duration>edit.start)
       const events=(s.discoveryEvents??[]).filter(e=>e.start<edit.end&&e.end>edit.start)
       return {edit_section:edit,question,global_bank_sections:s.sections.context.length,
         context:ranked.map(x=>({...x.section,match_reason:x.reason,priority:Math.round(x.score)})),
         local_candidate_events:events.slice(0,45),
         permitted_source_asset_ids:[...new Set(clips.map(c=>c.assetId!))],
-        read_saved:true,bank_revision:s.revision??0,
+        read_saved:true,reused:alreadySaved,bank_revision:s.revision??0,
         note:'Only summaries were loaded. The COMPLETE indexed recording is searchable by calling this tool again with another question or linked IDs. Inspect source transcript/observations, and inspect actual footage for every unresolved visual or audio claim.'}
     },
   },
