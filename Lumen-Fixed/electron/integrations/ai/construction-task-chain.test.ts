@@ -93,6 +93,16 @@ describe('bounded persistent video-construction call chains',()=>{
   // A known 429 is retriable even if its message is unhelpful.
   expect(isTransientConstructionError({status:429,message:'irrelevant'})).toBe(true)
  })
+ it('recovers only truly interrupted HTTP 200 response bodies, not invalid provider schemas',()=>{
+  const networkCause={statusCode:200,message:'Failed to process successful response',
+    cause:{message:'terminated',cause:{code:'UND_ERR_BODY_TIMEOUT',message:'Body Timeout Error'}}}
+  expect(isTransientConstructionError(networkCause)).toBe(true)
+  const malformed={statusCode:200,message:'Failed to process successful response',
+    cause:{message:'Invalid JSON response shape',name:'TypeValidationError'}}
+  expect(isTransientConstructionError(malformed)).toBe(false)
+  expect(isTransientConstructionError({statusCode:200,message:'Failed to process successful response'})).toBe(false)
+  expect(isTransientConstructionError({statusCode:200,message:'another error',cause:{code:'ECONNRESET'}})).toBe(false)
+ })
  it('does not crash on circular provider error metadata',()=>{
   const error:{code:string;cause?:unknown}={code:'ECONNRESET'}
   error.cause=error
