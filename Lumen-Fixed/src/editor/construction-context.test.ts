@@ -40,7 +40,7 @@ describe('spoken boundary safety',()=>{
     const clip=Object.values(p.clips)[0]
     clip.assetId='source'
     p.assets.source={id:'source',name:'Stream',kind:'video',hasAudio:true,duration:20,addedAt:1,
-      source:{type:'file',url:'file://stream.mp4',mime:'video/mp4',size:1},
+      source:{type:'file',url:'file://stream.mp4',fileName:'stream.mp4',mime:'video/mp4',size:1},
       transcript:[
         {start:3.0,end:4.0,text:'Here is the setup'},
         {start:5.0,end:6.5,text:'Wait, I have a plan'},
