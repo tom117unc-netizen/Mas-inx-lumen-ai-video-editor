@@ -43,6 +43,32 @@ async function discoverBeforeCut(start:number,end:number){
  }
  return scan
 }
+/** Full bank precedes all local editing decisions, and the actual timeline
+ * overview from the existing scenario supplies both section evidence packs. */
+async function completeTwoPassSections(inspectionId:string){
+ const before=getProject().construction?.sections
+ expect(before?.context.length).toBeGreaterThan(0)
+ for(const context of before!.context){
+  await run('record_construction_context_section',{
+   section_id:context.id,
+   summary:'Actual inspected gameplay section: establish local actions and the reaction, with no unsupported interpretation of silent activity.',
+   key_moments:['Scene state changes in the rendered mock gameplay'],
+   uncertainties:['Mock visual change has no human-verified semantic game meaning'],
+   inspection_ids:[inspectionId],
+  })
+ }
+ const next=getProject().construction!.sections!
+ for(const edit of next.editing){
+  const linked=await run('get_construction_edit_context',{section_id:edit.id,
+   question:'What earlier story setup and later reaction can affect these cuts?'}) as any
+  expect(linked.context.length).toBeGreaterThan(0)
+  await run('record_construction_edit_section',{
+   section_id:edit.id,
+   summary:'This deliberately short test section retains the local setup/reaction map and any proposed removal is gated by cross-video context.',
+   inspection_ids:[inspectionId],
+  })
+ }
+}
 it('registers a resumable workflow and marks project dirty without changing clips',async()=>{
  const before=structuredClone(getProject().clips),v=useEditor.getState().version
  await run('begin_video_construction',{goal:'Funny story'})
@@ -65,6 +91,7 @@ it('blocks unsampled cuts and applies verified cuts in one undo step',async()=>{
  const first=await run('inspect_video_range',{start_frame:99,end_frame:102,mode:'boundary'}) as any
  const last=await run('inspect_video_range',{start_frame:199,end_frame:202,mode:'boundary'}) as any
  await run('update_video_construction',{coverage:[{id:'all',start:0,end:300,visual:'Checked footage',audio:'Checked sound context',evidenceIds:[scan.json.inspection_id]}],beats:[{id:'scene',start:0,end:300,kind:'scene',summary:'Approach and reaction',dependsOn:[],protectedRanges:[]}],cuts:[{id:'cut',start:100,end:200,beatId:'scene',reason:'Repeated waiting',visualReason:'No new action',audioReason:'No line lost',evidenceIds:[scan.json.inspection_id,first.json.inspection_id,last.json.inspection_id]}]})
+ await completeTwoPassSections(scan.json.inspection_id)
  const before=structuredClone(getProject().clips),undo=useEditor.getState().past.length
  await expect(run('apply_video_construction')).rejects.toThrow(/context/i)
  expect(await run('inspect_cut_context',{cut_id:'cut'})).toMatchObject({recorded:true})
@@ -94,6 +121,7 @@ it('requires actual output inspection before recording a successful review',asyn
   const r=await run('inspect_video_range',{start_frame:start,end_frame:end,mode}) as any;ids.push(r.json.inspection_id)
  }
  await run('update_video_construction',{coverage:[{id:'all',start:0,end:300,visual:'Checked',audio:'Checked',evidenceIds:[ids[0]]}],beats:[{id:'scene',start:0,end:300,kind:'scene',summary:'Scene'}],cuts:[{id:'c',start:100,end:200,beatId:'scene',reason:'Repeated action',audioReason:'No line lost',visualReason:'No action lost',evidenceIds:ids}]})
+ await completeTwoPassSections(ids[0])
  await run('inspect_cut_context',{cut_id:'c'})
  await run('apply_video_construction')
  await expect(run('review_video_construction',{story:'Clear',pacing:'Good',issues:[]})).rejects.toThrow(/whole output/i)
@@ -193,7 +221,7 @@ it('indexes audiovisual event candidates from ONLY the current timeline and surv
  await run('scan_construction_events',{start_frame:150,end_frame:300})
  const after=await run('get_video_construction') as any
  expect(after.discoveryScans.total).toBe(2)
- expect(after.status.stage).toBe('investigate')
+ expect(after.status.stage).toBe('context-bank')
  const reloaded=JSON.parse(JSON.stringify(getProject()))
  useEditor.getState().loadProject(reloaded)
  expect((await run('get_video_construction') as any).discoveryEvents.total).toBeGreaterThan(0)
