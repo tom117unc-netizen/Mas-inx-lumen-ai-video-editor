@@ -36,7 +36,7 @@ function splitRanges(scope:SectionRange[],target:number,hints:SectionHint[],pref
         const possible=hints.filter(h=>h.start>=position && h.end<=r.end && validRange(h))
           .flatMap(h=>[h.start,h.end].map(frame=>({frame,
             score:(h.kind==='clip-boundary'?5:h.kind==='chapter'?4:h.kind==='audio-drop'?3:2)*
-              (h.strength??.5)-Math.abs(frame-at)/target})))
+              (h.strength??.5)-Math.abs(frame-at)/target-(h.kind==='clip-boundary'&&frame===h.end?.2:0)})))
           .filter(h=>h.frame>=lower && h.frame<=upper &&
             !hints.some(ev=>ev.start<h.frame && ev.end>h.frame && ev.kind!=='clip-boundary'))
           .sort((a,b)=>b.score-a.score)
