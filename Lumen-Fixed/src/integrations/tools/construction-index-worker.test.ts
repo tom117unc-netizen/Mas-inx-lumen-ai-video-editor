@@ -57,6 +57,14 @@ describe('resumable local construction indexing',()=>{
   })
   expect(called).toEqual([0,1800])
   expect(done.discoveryScans?.map(x=>[x.start,x.end])).toEqual([[0,1800],[1800,2400]])
+  // After source-backed publish, the output fingerprint intentionally changes
+  // but the finished ORIGINAL indexing checkpoint must remain valid.
+  const output=structuredClone(getProject())
+  const original=Object.values(output.clips)[0]
+  original.duration-=100
+  output.construction!.applied={fingerprint:'assembled-output',joins:[300]}
+  useEditor.getState().loadProject(output)
+  expect(constructionIndexProgress(getProject().construction!).state).toBe('completed')
  })
  it('pauses between chunks and resumes strictly from saved progress',async()=>{
   const s=fixture()
