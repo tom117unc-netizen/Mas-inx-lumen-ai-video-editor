@@ -69,7 +69,11 @@ const statusFor=(s:ConstructionState,job:LiveJob|null):IndexProgress=>{
 }
 export function constructionIndexProgress(s:ConstructionState):IndexProgress {
   const p=getProject()
-  const job=current&&current.projectId===s.projectId?current:null
+  // The output editor opens a NEW sequence after source indexing completes.
+  // Its fingerprint intentionally differs from the original. Do not let the
+  // retired original job make output review or later source-based repair stale.
+  const job=current&&current.projectId===s.projectId&&
+    current.fingerprint===s.fingerprint&&!s.applied?current:null
   if(job && (job.fingerprint!==s.fingerprint ||
      constructionFingerprint(p)!==job.fingerprint ||p.construction!==s))
     return {...statusFor(s,job),state:'stale',error:'Original timeline or construction changed; the indexing job cannot use stale source'}
