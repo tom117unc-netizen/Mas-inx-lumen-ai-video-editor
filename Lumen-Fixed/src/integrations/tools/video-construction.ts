@@ -2,6 +2,7 @@
 import { z } from 'zod'
 import { assertDiscoveryDecisionEvidence, beginConstruction, constructionFingerprint, constructionStatus, constructionStorySignature, mergeRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
 import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-event-index'
+import { selectBankContext } from '@/editor/construction-sections'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
@@ -80,8 +81,8 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     run:async a=>{
       if(!useSession.getState().path) throw new Error('Save the project before beginning persistent construction')
       if(getProject().construction && a.restart!==true) throw new Error('Construction already exists: resume with get_video_construction or explicitly restart')
-      const s=beginConstruction(getProject(),String(a.goal??''));await persist(s)
-      return {status:constructionStatus(getProject(),s),scope:s.scope,fps:s.fps}
+      const s=beginConstruction(getProject(),String(a.goal??''),true);await persist(s)
+      return {status:constructionStatus(getProject(),s),scope:s.scope,fps:s.fps,sections:{context:s.sections?.context.length,editing:s.sections?.editing.length,total_seconds:s.sections?.originalFrames/s.fps}}
     },
   },
   {
@@ -92,7 +93,107 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const s=state(false),offset=z.number().int().min(0).parse(a.offset??0),limit=z.number().int().min(1).max(100).parse(a.limit??40)
       const page=<T>(items:T[])=>({total:items.length,items:items.slice(offset,offset+limit),next_offset:offset+limit<items.length?offset+limit:null})
       const status=constructionStatus(getProject(),s)
-      return {goal:s.goal,fps:s.fps,revision:s.revision??0,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
+      return {goal:s.goal,fps:s.fps,revision:s.revision??0,sectionPlan:s.sections?{context_target_frames:s.sections.contextTargetFrames,edit_target_frames:s.sections.editTargetFrames,context:page(s.sections.context),editing:page(s.sections.editing),pending_context:s.sections.context.filter(x=>!x.indexed).length,pending_editing:s.sections.editing.filter(x=>!x.planned).length}:undefined,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
+    },
+  },
+  {
+    name:'record_construction_context_section',
+    description:'CONTEXT BANKING PASS: after actually examining the entire section (not just the audio level/index) save its compact, verified full-story context. Cite covering real timeline inspection receipt IDs, list factual key moments and uncertainties; a scan candidate alone is not proof of meaning. Index ALL sections before editing. This stores a timeline-scoped synopsis in the saved .lumen project; original source observations remain in the Context Bank.',
+    inputSchema:obj({section_id:str('Exact context section ID from sectionPlan'),summary:str('What really happened, setup/payoff, character/round/night progress, with uncertainties',{minLength:25,maxLength:1800}),
+      key_moments:list('Timestamp-aware facts or notable setups/reactions discovered in this section',str('Evidence-grounded moment',{minLength:5,maxLength:300}),{maxItems:25}),
+      uncertainties:list('Ambiguous, unverified events or missing audio/visual details',str('Uncertain detail',{maxLength:300}),{maxItems:15}),
+      inspection_ids:list('Actual inspect_video_range receipts collectively covering this entire section',str('Receipt ID'),{minItems:1,maxItems:64})},
+      ['section_id','summary','key_moments','uncertainties','inspection_ids']),
+    run:async a=>{
+      const s=state()
+      if(s.applied||s.paused)throw new Error('Cannot bank changed or paused footage')
+      if(!s.sections)throw new Error('Legacy construction has no adaptive section plan')
+      const id=z.string().trim().min(1).parse(a.section_id)
+      const section=s.sections.context.find(x=>x.id===id)
+      if(!section)throw new Error('Unknown context section ID')
+      const summary=z.string().trim().min(25).max(1800).parse(a.summary)
+      const moments=z.array(z.string().trim().min(5).max(300)).max(25).parse(a.key_moments)
+      const uncertainties=z.array(z.string().trim().min(1).max(300)).max(15).parse(a.uncertainties)
+      const ids=z.array(z.string().min(1)).min(1).max(64).parse(a.inspection_ids)
+      const receipts=s.inspections.filter(i=>ids.includes(i.id)&&i.audio&&i.frames.length)
+      if(!mergeRanges(receipts).some(r=>r.start<=section.start&&r.end>=section.end))
+        throw new Error('Context section needs continuous inspection receipt coverage; sparse overviews are sampled evidence, not full-frame observation')
+      const next=structuredClone(s)
+      const target=next.sections!.context.find(x=>x.id===id)!
+      target.indexed=true;target.summary=summary;target.keyMoments=moments;target.uncertainties=uncertainties;target.evidenceIds=ids
+      // A materially updated full-story synopsis invalidates earlier local
+      // context reads and editing decisions that were based on it.
+      if(section.summary!==summary || !section.indexed){
+        next.sections!.reads=[]
+        for(const e of next.sections!.editing){e.planned=false;e.summary=undefined;e.evidenceIds=undefined}
+      }
+      await persist(next)
+      return {saved:true,section_id:id,pending_context:next.sections!.context.filter(x=>!x.indexed).length,
+        status:constructionStatus(getProject(),next),note:'Grounded timeline context saved. It can be retrieved selectively from any edit section without loading the full recording.'}
+    },
+  },
+  {
+    name:'get_construction_edit_context',
+    description:'EDITING PASS: get a compact context pack for ONE local editing section, selected from the FULL timeline-wide section bank. Searches ALL bank summaries, always includes local/linked sections, and returns relevant earlier setups/later callbacks. Specify a concrete question, with known linked_context_ids. This records a context lookup receipt; for raw source evidence also use get_source_transcript and get_source_observations on the returned relevant authorised assets.',
+    inputSchema:obj({section_id:str('Exact edit section ID from sectionPlan'),
+      question:str('Specific editing question: rule, joke, setup/payoff, chronology or callback',{minLength:3,maxLength:400}),
+      linked_context_ids:list('Known setup/return/context sections anywhere in the original timeline',str('Section ID'),{maxItems:16}),
+      max_context_items:int('Maximum matching saved global context summaries, default 8, maximum 24',{minimum:1,maximum:24})},
+      ['section_id','question']),
+    run:async a=>{
+      const s=state(),p=getProject()
+      if(!s.sections)throw new Error('Legacy plan has no timeline-wide section context index')
+      if(s.sections.context.some(c=>!c.indexed))throw new Error('Complete the whole-timeline context banking pass first')
+      const id=z.string().trim().min(1).parse(a.section_id)
+      const edit=s.sections.editing.find(x=>x.id===id)
+      if(!edit)throw new Error('Unknown edit section ID')
+      const question=z.string().trim().min(3).max(400).parse(a.question)
+      const linked=z.array(z.string()).max(16).parse(a.linked_context_ids??[])
+      if(linked.some(x=>!s.sections!.context.some(c=>c.id===x)))throw new Error('Unknown linked global context section')
+      const ids=[...new Set([...(edit.contextIds??[]),...linked])]
+      const ranked=selectBankContext(s.sections.context,edit,question,ids,z.number().int().min(1).max(24).parse(a.max_context_items??8))
+      const next=structuredClone(s)
+      next.sections!.reads=[...(next.sections!.reads??[]).filter(r=>r.editSectionId!==id),
+        {editSectionId:id,bankSectionIds:ranked.map(x=>x.section.id),revision:s.revision??0}]
+      await persist(next)
+      const clips=Object.values(p.clips).filter(c=>c.assetId&&c.start<edit.end&&c.start+c.duration>edit.start)
+      const events=(s.discoveryEvents??[]).filter(e=>e.start<edit.end&&e.end>edit.start)
+      return {edit_section:edit,question,global_bank_sections:s.sections.context.length,
+        context:ranked.map(x=>({...x.section,match_reason:x.reason,priority:Math.round(x.score)})),
+        local_candidate_events:events.slice(0,45),
+        permitted_source_asset_ids:[...new Set(clips.map(c=>c.assetId!))],
+        read_saved:true,bank_revision:s.revision??0,
+        note:'Only summaries were loaded. The COMPLETE indexed recording is searchable by calling this tool again with another question or linked IDs. Inspect source transcript/observations, and inspect actual footage for every unresolved visual or audio claim.'}
+    },
+  },
+  {
+    name:'record_construction_edit_section',
+    description:'After cross-referencing the global bank and inspecting the local editing span, mark ONE local section planned. Keep its context query, source evidence, potential setup/payoffs and proposed cuts in the saved construction. All local sections must be planned before global edit application; this does not itself remove footage.',
+    inputSchema:obj({section_id:str('Edit section ID'),
+      summary:str('Why the retained moment sequence and any proposed removal preserve context',{minLength:25,maxLength:1600}),
+      inspection_ids:list('Actual local audiovisual inspection receipts covering this section',str('Receipt ID'),{minItems:1,maxItems:64})},
+      ['section_id','summary','inspection_ids']),
+    run:async a=>{
+      const s=state()
+      if(!s.sections||s.sections.context.some(c=>!c.indexed))throw new Error('Bank the entire original timeline before editing its sections')
+      if(s.applied||s.paused)throw new Error('Cannot mark edited or paused sections')
+      const id=z.string().trim().min(1).parse(a.section_id)
+      const e=s.sections.editing.find(x=>x.id===id)
+      if(!e)throw new Error('Unknown local edit section')
+      const read=s.sections.reads?.find(x=>x.editSectionId===id)
+      if(!read)throw new Error('Query the full global bank for this section with get_construction_edit_context before planning')
+      const summary=z.string().trim().min(25).max(1600).parse(a.summary)
+      const ids=z.array(z.string()).min(1).max(64).parse(a.inspection_ids)
+      const receipts=s.inspections.filter(x=>ids.includes(x.id)&&x.audio&&x.frames.length)
+      if(!mergeRanges(receipts).some(r=>r.start<=e.start&&r.end>=e.end))
+        throw new Error('Local edit section needs continuous source inspection receipt coverage')
+      if(!s.beats.some(b=>b.start<e.end&&e.start<b.end))
+        throw new Error('Create a corresponding story beat before certifying a local section edit')
+      const next=structuredClone(s),target=next.sections!.editing.find(x=>x.id===id)!
+      target.planned=true;target.summary=summary;target.evidenceIds=ids
+      target.linkedContextIds=read.bankSectionIds
+      await persist(next)
+      return {saved:true,edit_section:id,pending_editing:next.sections!.editing.filter(x=>!x.planned).length}
     },
   },
   {
