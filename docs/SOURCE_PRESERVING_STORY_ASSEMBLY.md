@@ -22,6 +22,14 @@ The model can save revisions in small batches with `record_keep_first_selections
 
 The validation is intentionally conservative: it may require more inspection and clarification rather than silently losing an important reaction.
 
+## Grounded narrative event ledger
+
+Beyond free-text scene summaries and beat dependencies, `record_construction_narrative_moments` records important actual events by **exact original source frames**, type (challenge rule, night start/end, discovery, joke setup/payoff, callback, reaction or outcome), importance, direct/uncertain confidence, real inspector receipts and typed causal links.
+
+The Director may call it in 20-event batches. It is idempotent on identical source evidence. The assembler requires every explicitly `essential` event to appear in at least one retained selection. Linked callbacks, end-of-night results and joke payoffs must have their relevant earlier setup/beginning in a coherent output order. A later payoff can be shown briefly as a cold-open hook, as long as it occurs again after its actual context. Missing linked source events or unverified events falsely declared essential block publication.
+
+The emitted `assembly.moments` preserves each important original event's **actual output timestamps and selection ID**, allowing subsequent source-accurate review to challenge a missing rule, setup or payoff. A model-supplied observation remains a claim grounded in inspector evidence, not objective proof that the gameplay or joke was understood.
+
 ## Frame-accurate multi-track output
 
 The assembler uses the editor's existing `splitClip` timing implementation to trim exact subranges, rather than calculating new source in-points by naive multiplication. The resulting sequence preserves every eligible original overlapping track—video, voice, overlays, effects, music, titles and markers—while remapping clip/group/track IDs to avoid collisions.
@@ -54,4 +62,4 @@ After a review records real issues, `reopen_construction_source_for_repair` perf
 - `Lumen-Fixed/src/integrations/tools/video-construction.ts` — staged selection, preview, publish, audit and repair tools
 - `Lumen-Fixed/electron/integrations/ai/construction-task-chain.ts` — small Director work units across model calls
 
-Tests cover original timeline preservation, reordering, exact clip and group routing, protected moments, omitted unresolved discoveries, actual source maps, deterministic audit corruption detection, source-backed repair, multi-version preservation and undo.
+Tests cover original timeline preservation, reordering, exact clip and group routing, protected moments, omitted unresolved discoveries, event-ledger preservation, joke setup/payoff continuity, round/night starts and endings, actual source maps, deterministic audit corruption detection, source-backed repair, multi-version preservation and undo.
