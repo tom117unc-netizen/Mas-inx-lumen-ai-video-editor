@@ -653,6 +653,23 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     },
   },
   {
+    name:'reopen_construction_source_for_repair',
+    description:'After a published keep-first output FAILS its actual video review, reopen the untouched authorised ORIGINAL timeline and restore all original inspector receipts, context bank, beats and selected EDL. Keep the earlier output as a separate sequence. Then revise selected spans and publish a NEW version, without needing to re-index the whole source. This is one undoable editor transaction.',
+    inputSchema:obj({}),
+    run:async()=>{
+      const s=state()
+      if(!s.assembly||!s.review?.issues.length)
+        throw new Error('This recovery route needs a published keep-first assembly and a completed review identifying real issues')
+      const result=dispatch('construction.restoreSourceForRepair',{}, {source:'ai'})
+      if(!result.ok)throw new Error(result.error)
+      if(!await saveProject())throw new Error('Original source was reopened in memory, but the project save failed. Save before further edits.')
+      const restored=state(false)
+      return {reopened:true,...result.result as Record<string,unknown>,
+        status:constructionStatus(getProject(),restored),
+        note:'All original footage, verified source receipts, and cross-video context remain available. The old output is preserved. Adjust selected moments, preview again and publish the next corrected version.'}
+    },
+  },
+  {
     name:'begin_construction_repair',
     description:'Start a fresh bounded editorial pass on the CURRENT edited timeline after review found real problems. Keeps the previous failing join frames and issue explanations as repair context; never restores deleted footage or secretly changes source selection. Requires an unfinished review with unresolved issues.',
     inputSchema:obj({goal:str('Specific repair objective for failed joins or continuity')},['goal']),
