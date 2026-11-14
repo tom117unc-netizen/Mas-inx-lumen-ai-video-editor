@@ -5,6 +5,7 @@ import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-ev
 import { nextContextInspectionProbe, planConstructionSections, selectBankContext } from '@/editor/construction-sections'
 import { auditPublishedAssembly, composeKeepFirstSequence, validateKeepFirstSelections, validateOutputSourceMap } from '@/editor/construction-assembler'
 import { validateNarrativeMoment } from '@/editor/construction-narrative'
+import { auditOutputNarrative } from '@/editor/construction-output-critic'
 import { pendingEventInvestigations, validateConstructionEventFinding } from '@/editor/construction-event-findings'
 import { constructionIndexProgress, pauseConstructionIndexJob, startConstructionIndexJob } from './construction-index-worker'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
@@ -105,7 +106,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
         next_context_probe:nextContextProbe?{section_id:pending!.id,...nextContextProbe}:null,
         next_context_inspection_ids:sectionReceipts.map(i=>i.id).slice(0,64),
         next_edit_section:s.sections?.editing.find(x=>!x.planned)??null,
-        sectionPlan:s.sections?{context_target_frames:s.sections.contextTargetFrames,edit_target_frames:s.sections.editTargetFrames,context:page(s.sections.context),editing:page(s.sections.editing),pending_context:s.sections.context.filter(x=>!x.indexed).length,pending_editing:s.sections.editing.filter(x=>!x.planned).length}:undefined,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
+        sectionPlan:s.sections?{context_target_frames:s.sections.contextTargetFrames,edit_target_frames:s.sections.editTargetFrames,context:page(s.sections.context),editing:page(s.sections.editing),pending_context:s.sections.context.filter(x=>!x.indexed).length,pending_editing:s.sections.editing.filter(x=>!x.planned).length}:undefined,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review,narrativeAudit:s.assembly&&s.applied?auditOutputNarrative(s):null}
     },
   },
   {
@@ -843,6 +844,16 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     },
   },
   {
+    name:'audit_output_narrative',
+    description:'Run the skeptical deterministic narrative critic against the ACTUAL assembled output and its fresh post-edit inspection receipts. Detect missing essential story moments, unwitnessed results, broken setup/callback order and rounds without outcomes. This checks evidence/provenance, not semantic listening or human watchability. Run before final approval and repair flagged sections.',
+    inputSchema:obj({}),
+    run:async()=>{
+      const s=state()
+      if(!s.assembly||!s.applied)throw new Error('Publish and inspect the keep-first output before auditing its story')
+      return auditOutputNarrative(s)
+    },
+  },
+  {
     name:'review_video_construction',
     description:'Record a post-edit review after inspecting the actual new joins and whole output. Completion requires every join inspected, sampled audiovisual coverage of the output, explicit story/pacing findings, no unresolved issues and no structural errors. Findings are model judgements, not proof of human-quality editing.',
     inputSchema:obj({story:str('Can a new viewer understand the progression, setups and payoffs?'),pacing:str('Assess internal scene rhythm, necessary silence and transitions'),issues:list('Unresolved problems; empty only if checks passed',str('Problem'),{maxItems:100}),join_verdicts:list('Explicit decision for each flagged audio join; accept only with evidence from the actual scene',obj({frame,verdict:oneOf('Join decision',['accept','repair']),reason:str('Specific rationale explaining intentionality or defect',{minLength:20})},['frame','verdict','reason']),{maxItems:100})},['story','pacing','issues']),
@@ -868,11 +879,12 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
         throw new Error('Verdict refers to unknown join')
       const quality=assessVideoQuality(p,defaultVideoBrief('gaming-highlights'))
       const sourceAudit=s.assembly?auditPublishedAssembly(p,s):null
-      const issues=[...findings.issues,...(sourceAudit?.issues??[]),
+      const narrativeAudit=s.assembly?auditOutputNarrative(s):null
+      const issues=[...findings.issues,...(sourceAudit?.issues??[]),...(narrativeAudit?.issues??[]),
         ...findings.join_verdicts.filter(v=>v.verdict==='repair').map(v=>`Audio join ${v.frame} needs repair: ${v.reason}`),
         ...quality.findings.filter(f=>f.severity==='error').map(f=>f.message)]
       const next=structuredClone(s);next.review={story:findings.story,pacing:findings.pacing,issues,joinVerdicts:findings.join_verdicts,joins:s.applied.joins,fingerprint};await persist(next)
-      return {status:constructionStatus(p,next),quality,sourceAudit}
+      return {status:constructionStatus(p,next),quality,sourceAudit,narrativeAudit}
     },
   },
 ]
