@@ -357,7 +357,10 @@ async function runModel(req: AgentRunRequest) {
             case 'error':
               throw part.error
             case 'finish':
-              usage = { inputTokens: part.totalUsage.inputTokens, outputTokens: part.totalUsage.outputTokens }
+              usage = {
+                inputTokens:(usage?.inputTokens??0)+(part.totalUsage.inputTokens??0),
+                outputTokens:(usage?.outputTokens??0)+(part.totalUsage.outputTokens??0),
+              }
               break
           }
         }
