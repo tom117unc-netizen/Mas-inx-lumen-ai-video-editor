@@ -5,6 +5,7 @@ import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-ev
 import { nextContextInspectionProbe, planConstructionSections, selectBankContext } from '@/editor/construction-sections'
 import { auditPublishedAssembly, composeKeepFirstSequence, validateKeepFirstSelections, validateOutputSourceMap } from '@/editor/construction-assembler'
 import { validateNarrativeMoment } from '@/editor/construction-narrative'
+import { pendingEventInvestigations, validateConstructionEventFinding } from '@/editor/construction-event-findings'
 import { constructionIndexProgress, pauseConstructionIndexJob, startConstructionIndexJob } from './construction-index-worker'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript, untranscribed } from '@/editor/smart'
@@ -99,7 +100,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const pending=s.sections?.context.find(x=>!x.indexed)
       const sectionReceipts=pending?s.inspections.filter(i=>i.audio&&i.frames.length&&i.start<pending.end&&i.end>pending.start):[]
       const nextContextProbe=pending?nextContextInspectionProbe(pending,sectionReceipts,Math.round(s.fps*60)):null
-      return {goal:s.goal,fps:s.fps,revision:s.revision??0,indexing:constructionIndexProgress(s),source_manifest:s.sourceManifest?{sequence_id:s.sourceManifest.sequenceId,fingerprint:s.sourceManifest.fingerprint,source_clips:Object.keys(s.sourceManifest.clips).length}:null,sourceSelections:page(s.sourceSelections??[]),narrativeMoments:page(s.narrativeMoments??[]),assembly:s.assembly?{sequence_id:s.assembly.sequenceId,source_sequence_id:s.assembly.sourceSequenceId,output_frames:s.assembly.outputFrames,selected_spans:page(s.assembly.selections),mapped_moments:page(s.assembly.moments??[]),source_clips:page(s.assembly.clips)}:null,
+      return {goal:s.goal,fps:s.fps,revision:s.revision??0,indexing:constructionIndexProgress(s),source_manifest:s.sourceManifest?{sequence_id:s.sourceManifest.sequenceId,fingerprint:s.sourceManifest.fingerprint,source_clips:Object.keys(s.sourceManifest.clips).length}:null,sourceSelections:page(s.sourceSelections??[]),narrativeMoments:page(s.narrativeMoments??[]),eventFindings:page(s.eventFindings??[]),pendingEventInvestigations:pendingEventInvestigations(s,20),assembly:s.assembly?{sequence_id:s.assembly.sequenceId,source_sequence_id:s.assembly.sourceSequenceId,output_frames:s.assembly.outputFrames,selected_spans:page(s.assembly.selections),mapped_moments:page(s.assembly.moments??[]),source_clips:page(s.assembly.clips)}:null,
         next_context_section:pending??null,
         next_context_probe:nextContextProbe?{section_id:pending!.id,...nextContextProbe}:null,
         next_context_inspection_ids:sectionReceipts.map(i=>i.id).slice(0,64),
@@ -401,6 +402,72 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       return {total:ranked.length,items:ranked.slice(offset,offset+limit),
         next_offset:offset+limit<ranked.length?offset+limit:null,
         note:'Priority measures evidence uncertainty and proposed edit risk, not narrative value or humour. Continue discovery of unscanned timeline ranges in parallel.'}
+    },
+  },
+  {
+    name:'get_event_investigation_queue',
+    description:'Get the next bounded set of source event candidates that still lack an evidence-backed semantic interpretation. The automatic index discovers WHERE to look; ONLY focused audiovisual inspection can establish what happened. These are priorities, not claims of humour, safety or importance.',
+    inputSchema:obj({limit:int('Candidates to investigate, default 12 maximum 30',{minimum:1,maximum:30})}),
+    run:async a=>{
+      const s=state(),limit=z.number().int().min(1).max(30).parse(a.limit??12)
+      return {pending:(s.discoveryEvents??[]).filter(e=>e.decision!=='discard'&&!(s.eventFindings??[]).some(f=>f.eventId===e.id)).length,
+        items:pendingEventInvestigations(s,limit),note:'Inspect the actual current source timeline in a focused range. If interpretation depends on sound or vocal delivery, capture and listen to real audio with an audio-capable model; otherwise keep it uncertain.'}
+    },
+  },
+  {
+    name:'record_construction_event_findings',
+    description:'Interpret up to 15 original-timeline signal candidates AFTER actual source inspection. Describe observed gameplay, rules, round changes, jokes, reactions, music or sound, or state unknown. Every observed semantic event needs focused inspected visuals. Sound-dependent claims need a corresponding actually heard, recorded audio observation covering the event; a transcript or numeric loudness score cannot prove laughter, emotion or game sound. Save uncertainty rather than hallucinating. Interpret source only; web research cannot prove recorded events.',
+    inputSchema:obj({findings:list('Grounded semantic interpretations',obj({
+      event_id:str('Exact source candidate event ID from get_event_investigation_queue'),
+      kind:oneOf('Actual observed kind',['unknown','speech','gameplay','challenge-rule','round-transition','reaction','laughter','joke','music','game-sound','scene-change','background']),
+      summary:str('Concrete observation from the actual video and/or heard audio, not a game fact inferred from research',{minLength:20,maxLength:1500}),
+      confidence:oneOf('Observed or uncertain',['observed','uncertain']),
+      inspection_ids:list('Real original timeline inspection receipt IDs',str('Receipt ID'),{minItems:1,maxItems:30}),
+      audio_observation_ids:list('If claiming sound meaning, real heard-audio observation IDs',str('Audio observation ID'),{maxItems:12}),
+      linked_moment_ids:list('Optional existing narrative moment IDs that explain distant context',str('Moment ID'),{maxItems:20}),
+      uncertainty:str('Explicit unknowns, particularly for unlistened sound and unseen frames',{maxLength:1200}),
+    },['event_id','kind','summary','confidence','inspection_ids','uncertainty']),{minItems:1,maxItems:15})},['findings']),
+    run:async a=>{
+      const prev=state()
+      if(prev.applied||prev.paused)throw new Error('Interpret original events before publishing and only while construction is active')
+      const schema=z.array(z.object({
+        event_id:z.string().trim().min(1).max(128),
+        kind:z.enum(['unknown','speech','gameplay','challenge-rule','round-transition','reaction','laughter','joke','music','game-sound','scene-change','background']),
+        summary:z.string().trim().min(20).max(1500),confidence:z.enum(['observed','uncertain']),
+        inspection_ids:z.array(z.string().min(1)).min(1).max(30),
+        audio_observation_ids:z.array(z.string().min(1)).max(12).default([]),
+        linked_moment_ids:z.array(z.string().min(1)).max(20).default([]),
+        uncertainty:z.string().trim().max(1200).default(''),
+      })).min(1).max(15).parse(a.findings)
+      if(new Set(schema.map(x=>x.event_id)).size!==schema.length)throw new Error('Duplicate event ID in one interpretation batch')
+      const existing=new Map((prev.eventFindings??[]).map(x=>[x.eventId,x]))
+      for(const x of schema){
+        const finding={
+          eventId:x.event_id,kind:x.kind,summary:x.summary,confidence:x.confidence,
+          inspectionIds:x.inspection_ids,audioObservationIds:x.audio_observation_ids,
+          linkedMomentIds:x.linked_moment_ids,uncertainty:x.uncertainty,
+        }
+        validateConstructionEventFinding(prev,finding)
+        existing.set(finding.eventId,finding)
+      }
+      const changes=[...existing.values()]
+      if(changes.length>10000)throw new Error('Too many interpreted candidate events for one project; separate episodes')
+      const changed=JSON.stringify(changes)!==JSON.stringify(prev.eventFindings??[])
+      if(changed){
+        const next=structuredClone(prev)
+        next.eventFindings=changes
+        // New source meaning can expose a forgotten setup/callback. Do not
+        // allow earlier local story decisions to retain stale verification.
+        if(next.sections){
+          next.sections.reads=[]
+          for(const e of next.sections.editing){e.planned=false;e.summary=undefined;e.evidenceIds=undefined;e.linkedContextIds=undefined}
+        }
+        next.contextInspections=[]
+        await persist(next)
+      }
+      return {saved:changed,reused:!changed,interpreted:changes.length,
+        remaining:pendingEventInvestigations({...prev,eventFindings:changes},10001).length,
+        note:'Semantic observations remain fallible model interpretations. Only the supplied audiovisual receipts anchor them to original source. Essential events must be separately grounded in the narrative moment ledger.'}
     },
   },
   {
