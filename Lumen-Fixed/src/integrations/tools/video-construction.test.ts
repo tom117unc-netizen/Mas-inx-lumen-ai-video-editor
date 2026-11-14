@@ -3,10 +3,11 @@ import type { Project } from '@/editor/types'
 vi.mock('@/engine/stills',()=>({timelineStills:async(_p:Project,frames:number[],width:number)=>frames.map(()=>({width,height:width*9/16})),canvasBase64:()=> 'image',contactSheet:()=>({}),mediaStills:()=>[]}))
 vi.mock('@/project/session',()=>({useSession:{getState:()=>({path:'/test.lumen'})},saveProject:async()=>true,isDirty:()=>false}))
 const audioMock=vi.hoisted(()=>({click:false}))
-vi.mock('@/engine/audio-engine',async original=>({...await original<typeof import('@/engine/audio-engine')>(),prepareAudio:async()=>{},renderMix:async()=>{
- const d=new Float32Array(48000)
- if(audioMock.click){d.fill(.35,0,24000);d.fill(-.65,24000)}
- return {sampleRate:48000,length:48000,duration:1,numberOfChannels:1,getChannelData:()=>d}
+vi.mock('@/engine/audio-engine',async original=>({...await original<typeof import('@/engine/audio-engine')>(),prepareAudio:async()=>{},renderMix:async(_p:Project,from:number,to:number,opts?:{sampleRate?:number})=>{
+ const rate=opts?.sampleRate??48000, length=Math.max(1,Math.round((to-from)*rate))
+ const d=new Float32Array(length)
+ if(audioMock.click){d.fill(.35,0,Math.floor(length/2));d.fill(-.65,Math.floor(length/2))}
+ return {sampleRate:rate,length,duration:length/rate,numberOfChannels:1,getChannelData:()=>d}
 }}))
 const { VIDEO_CONSTRUCTION_TOOLS }=await import('./video-construction')
 const { useEditor,getProject,dispatch }=await import('@/editor/store')
@@ -132,6 +133,7 @@ it('returns a bounded, real timeline WAV and persists an audio evidence receipt'
  expect(bridged.content[1]).toMatchObject({type:'audio',mimeType:'audio/wav'})
  expect(clip.audio.data).toMatch(/^[A-Za-z0-9+/=]+$/)
  expect(clip.json).toMatchObject({start_frame:30,end_frame:150,purpose:'Check how the joke is delivered'})
+ expect(clip.json.audio_seconds).toBeCloseTo(4,2)
  expect(getProject().construction?.audioSamples?.[0]).toMatchObject({id:clip.json.audio_sample_id,start:30,end:150})
  const found=await run('record_construction_audio_observation',{sample_id:clip.json.audio_sample_id,
    event_type:'uncertain',summary:'No known dialogue from transcript; audio inference uncertain',confidence:'low',
