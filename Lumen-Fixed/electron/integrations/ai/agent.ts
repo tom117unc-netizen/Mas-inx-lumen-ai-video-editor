@@ -388,7 +388,7 @@ async function runModel(req: AgentRunRequest) {
         writeHistory(req.conversationId, next)
         transientRetries=0
         if (constructionActive) {
-          let report = await callEditorTool('get_video_construction', { limit: 5 })
+          let report = await callEditorTool('get_construction_checkpoint', { limit: 5 })
           let indexJob = (report.structuredContent as {indexing?:{state?:string;percent?:number;error?:string}}|undefined)?.indexing
           if(!report.isError && (indexJob?.state==='running'||indexJob?.state==='pausing')) {
             // The renderer's index worker is crunching original media locally.
@@ -402,7 +402,7 @@ async function runModel(req: AgentRunRequest) {
             try {
               while(indexJob?.state==='running'||indexJob?.state==='pausing') {
                 await waitForRetry(2500,controller.signal)
-                report=await callEditorTool('get_video_construction',{limit:5})
+                report=await callEditorTool('get_construction_checkpoint',{limit:5})
                 if(report.isError)break
                 indexJob=(report.structuredContent as {indexing?:{state?:string;percent?:number;error?:string}}|undefined)?.indexing
                 const rounded=Math.floor((indexJob?.percent??0)/10)*10
@@ -477,7 +477,7 @@ async function runModel(req: AgentRunRequest) {
           // The failed model call may already have edited and checkpointed a
           // scene. Never replay its partial tool-call transcript: recover the
           // saved state and request the next idempotent, bounded work unit.
-          const report=await callEditorTool('get_video_construction',{limit:5})
+          const report=await callEditorTool('get_construction_checkpoint',{limit:5})
           const snapshot=report.structuredContent as {status?:{stage?:string;complete?:boolean}}|undefined
           if(!report.isError && snapshot?.status?.complete) {
             // The last provider response was lost but the editor's persisted
