@@ -21,7 +21,7 @@ interface Snapshot {
   beats?:{total?:unknown};cuts?:{total?:unknown}
   discoveryScans?:{total?:unknown};discoveryEvents?:{total?:unknown}
   inspections?:{total?:unknown};joinAudioChecks?:{total?:unknown}
-  applied?:unknown;review?:unknown
+  applied?:unknown;assembly?:{sequence_id?:unknown};review?:unknown
 }
 const safeRange=(value:unknown):ShortRange|null=>{
   if(!value||typeof value!=='object')return null
@@ -85,7 +85,7 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
       :'KEEP-FIRST STORY SELECTION: use the full context bank and actual inspected original timeline evidence to select the first few strongest story moments via record_keep_first_selections. State explicit output_order, real source start/end, role, beat_id and inspector receipt IDs. Build hook, setup, escalation, payoff and ending across several small calls. Do NOT import new footage or apply destructive timeline.removeRange.';
   } else if(stage==='review'){
     task=reviewIssues.length
-      ?`A completed review found a real defect: ${reviewIssues.map(x=>brief(x,180)).join(' | ')}. Use begin_construction_repair for one focused, bounded correction pass on the CURRENT permitted timeline; do not claim the edit is finished or assume deleted source is recoverable.`
+      ?`A completed review found a real defect: ${reviewIssues.map(x=>brief(x,180)).join(' | ')}. ${s.assembly?'Use reopen_construction_source_for_repair to restore the intact original timeline, saved evidence and all source selections, then revise ONLY the failed moments and rebuild a new output version.':'For legacy destructive output, use begin_construction_repair on the current timeline without claiming omitted footage can be restored.'} Never mark the video complete until actual output evidence and review checks pass.`
       :'Inspect ONE unfinished edited join or a short part of the actual output, including mixed audio. Record grounded evidence; finalize review only after every join and required story section has been checked.'
   } else {
     task='Read get_video_construction and report the unresolved blocker; do not repeat destructive actions.'
