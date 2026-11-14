@@ -33,8 +33,9 @@ function union(ranges:{start:number;end:number}[]){
 function inspected(m:MappedNarrativeMoment,receipts:InspectionReceipt[]){
   const valid=receipts.filter(r=>r.audio&&r.frames.length&&
     r.start<m.outputEnd&&r.end>m.outputStart)
+  const targeted=valid.filter(r=>r.mode==='focused'||r.mode==='boundary')
   return union(valid).some(r=>contains(r,{start:m.outputStart,end:m.outputEnd})) &&
-    valid.some(r=>r.frames.some(f=>f>=m.outputStart&&f<m.outputEnd))
+    targeted.some(r=>r.frames.some(f=>f>=m.outputStart&&f<m.outputEnd))
 }
 export function auditOutputNarrative(s:ConstructionState):OutputNarrativeAudit {
   const issues:string[]=[]
@@ -95,7 +96,7 @@ export function auditOutputNarrative(s:ConstructionState):OutputNarrativeAudit {
       continue
     }
     if(!visible.some(m=>inspected(m,receipts)))
-      issues.push('Required '+moment.kind+' has not been re-inspected in the ACTUAL edited output: '+moment.id)
+      issues.push('Required '+moment.kind+' needs focused re-inspection in the ACTUAL edited output: '+moment.id)
     else verified++
     for(const link of moment.links){
       if(!['requires','answers','callback','consequence'].includes(link.relation))continue
