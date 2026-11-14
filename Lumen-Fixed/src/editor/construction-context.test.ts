@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createEmptyProject } from './new-project'
 import { createClip } from './defaults'
 import { beginConstruction, updateConstruction } from './video-construction'
-import { relatedStoryContext, speechCutContext } from './construction-context'
+import { relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from './construction-context'
 
 function story() {
   const p = createEmptyProject('Continuity')
@@ -28,6 +28,17 @@ describe('cross-scene contextual investigation',()=>{
     expect(c.related.map(b=>b.id)).toContain('ending')
     expect(c.nearby.map(b=>b.id)).toContain('ending')
     expect(c.cut.id).toBe('travel')
+  })
+  it('hunts potential callbacks elsewhere in the timeline transcript',()=>{
+    const {p,s}=story()
+    const clip=Object.values(p.clips)[0]
+    clip.assetId='source'
+    p.assets.source={id:'source',name:'Stream',kind:'video',hasAudio:true,duration:20,addedAt:1,
+      source:{type:'file',url:'file://stream.mp4',fileName:'stream.mp4',mime:'video/mp4',size:1},
+      transcript:[{start:19,end:19.5,text:'I still have that cursed key!'}]}
+    const candidates=transcriptCallbackCandidates(p,s.cuts[0],'cursed key')
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0].matchedTerms).toEqual(['cursed','key'])
   })
   it('rejects unknown cut IDs',()=>{
     expect(()=>relatedStoryContext(story().s,'missing')).toThrow(/cut/i)
