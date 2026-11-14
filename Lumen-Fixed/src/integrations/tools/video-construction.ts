@@ -940,7 +940,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const issues=[...findings.issues,...(sourceAudit?.issues??[]),...(narrativeAudit?.issues??[]),
         ...findings.join_verdicts.filter(v=>v.verdict==='repair').map(v=>`Audio join ${v.frame} needs repair: ${v.reason}`),
         ...quality.findings.filter(f=>f.severity==='error').map(f=>f.message)]
-      const next=structuredClone(s);next.review={story:findings.story,pacing:findings.pacing,issues,joinVerdicts:findings.join_verdicts,joins:s.applied.joins,fingerprint};await persist(next)
+      const next=structuredClone(s);next.review={story:findings.story,pacing:findings.pacing,issues,joinVerdicts:findings.join_verdicts,joins:s.applied.joins,fingerprint,...(s.assembly?{outputAuditVersion:1 as const}:{})};await persist(next)
       return {status:constructionStatus(p,next),quality,sourceAudit,narrativeAudit}
     },
   },
