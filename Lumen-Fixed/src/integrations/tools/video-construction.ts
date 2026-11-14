@@ -125,7 +125,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
         joinAudioChecks:pageCount(s.joinAudioChecks),
         audioObservations:pageCount(s.audioObservations),
         assembly:s.assembly?{sequence_id:s.assembly.sequenceId,output_frames:s.assembly.outputFrames}:null,
-        review:s.review?{issues:s.review.issues??[],verdict:s.review.verdict}:null,
+        review:s.review?{issues:(s.review.issues??[]).slice(0,5),audited:s.review.outputAuditVersion===1}:null,
         repairOf:s.repairOf?{depth:s.repairOf.depth}:null,
       }
     },
