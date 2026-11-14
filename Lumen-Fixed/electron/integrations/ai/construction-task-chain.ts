@@ -17,7 +17,7 @@ interface Snapshot {
   next_context_section?:unknown;next_context_probe?:unknown;next_context_inspection_ids?:unknown;next_edit_section?:unknown
   sectionPlan?:{context_target_frames?:unknown;edit_target_frames?:unknown;pending_context?:unknown;pending_editing?:unknown}
   discoveryPending?:unknown
-  sourceSelections?:{total?:unknown};assembly?:unknown
+  sourceSelections?:{total?:unknown}
   beats?:{total?:unknown};cuts?:{total?:unknown}
   discoveryScans?:{total?:unknown};discoveryEvents?:{total?:unknown}
   inspections?:{total?:unknown};joinAudioChecks?:{total?:unknown}
