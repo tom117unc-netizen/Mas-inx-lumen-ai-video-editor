@@ -386,6 +386,7 @@ it('publishes an independently editable output sequence without changing the ori
  expect(first.source_manifest.source_clips).toBe(1)
  await run('scan_construction_events',{start_frame:0,end_frame:300})
  const overview=await run('inspect_video_range',{start_frame:0,end_frame:300,mode:'overview'}) as any
+ const startEdge=await run('inspect_video_range',{start_frame:0,end_frame:3,mode:'boundary'}) as any
  await run('update_video_construction',{beats:[{id:'complete',start:0,end:300,kind:'scene',
    summary:'Maintain the entire original video, including its beginning and final payoff.'}]})
  await completeTwoPassSections(overview.json.inspection_id)
@@ -395,7 +396,7 @@ it('publishes an independently editable output sequence without changing the ori
    id:'complete-video',start_frame:0,end_frame:300,output_order:0,
    role:'complete',beat_id:'complete',
    reason:'Keep the complete game and commentary intact in the first non-destructive version.',
-   inspection_ids:[overview.json.inspection_id],
+   inspection_ids:[overview.json.inspection_id,startEdge.json.inspection_id],
  }]})
  const preview=await run('preview_keep_first_assembly',{name:'Lumen first cut'}) as any
  expect(preview).toMatchObject({valid:true,original_sequence_id:originalId,output_frames:300})
