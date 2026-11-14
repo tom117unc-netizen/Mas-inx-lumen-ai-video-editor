@@ -5,6 +5,7 @@ import { z } from 'zod'
 import type { Project } from './types'
 import type { JoinAudioReport } from './construction-join-audio'
 import type { EventSignal } from './construction-event-index'
+import { planConstructionSections, type BankedSection, type PlannedSection } from './construction-sections'
 import { projectFingerprint } from './anime-review-approval'
 
 const frame = z.number().int().nonnegative()
@@ -34,7 +35,13 @@ export interface ConstructionAudioSample {id:string;start:number;end:number;fing
 export interface ConstructionAudioObservation {id:string;sampleId:string;eventType:'speech_delivery'|'laughter'|'game_sound'|'music'|'silence'|'uncertain';summary:string;audibleCues:string;confidence:'low'|'medium'|'high';uncertainty:string}
 export interface ConstructionJoinAudioCheck {frame:number;fingerprint:string;report:JoinAudioReport|null}
 export interface ConstructionJoinVerdict {frame:number;verdict:'accept'|'repair';reason:string}
+export interface ConstructionSectionPlan {
+  originalFrames:number;contextTargetFrames:number;editTargetFrames:number;
+  context:BankedSection[];editing:(PlannedSection & {planned?:boolean;summary?:string;evidenceIds?:string[];linkedContextIds?:string[]})[];
+  reads?:{editSectionId:string;bankSectionIds:string[];revision:number}[];
+}
 export interface ConstructionState {
+  sections?:ConstructionSectionPlan;
   version:1; paused?:boolean; discoveryRequired?:boolean; revision?:number; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
   coverage:z.infer<typeof coverageSchema>[];beats:StoryBeat[];cuts:ConstructionCut[];inspections:InspectionReceipt[];
   contextInspections?:ContextInspectionReceipt[];
@@ -82,12 +89,24 @@ export function mergeRanges(ranges:FrameRange[]):FrameRange[] {
 }
 function inside(r:FrameRange, scope:FrameRange[]) { return scope.some(s=>r.start>=s.start && r.end<=s.end) }
 function overlap(a:FrameRange,b:FrameRange) {return a.start<b.end && b.start<a.end}
-export function beginConstruction(p:Project,goal:string):ConstructionState {
+export function beginConstruction(p:Project,goal:string,sectioned=false):ConstructionState {
   text.parse(goal)
   const scope=mergeRanges(Object.values(p.clips).map(c=>({start:c.start,end:c.start+c.duration})))
   if(!scope.length) throw new Error('Put the permitted footage on the timeline first.')
   scope.forEach(r=>range.parse(r))
-  return {version:1,discoveryRequired:true,revision:0,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
+  const scheduled=sectioned?planConstructionSections(scope,p.settings.fps,
+    [...p.markers.map(m=>({start:m.frame,end:m.frame+1,kind:'chapter',strength:1})),
+      ...Object.values(p.clips).flatMap(c=>[
+        {start:c.start,end:c.start+1,kind:'clip-boundary',strength:1},
+        {start:c.start+c.duration,end:c.start+c.duration+1,kind:'clip-boundary',strength:1},
+      ])]):null
+  const sections=scheduled?{
+    originalFrames:scheduled.totalFrames,
+    contextTargetFrames:scheduled.contextTargetFrames,
+    editTargetFrames:scheduled.editTargetFrames,
+    context:scheduled.context,editing:scheduled.editing,reads:[],
+  }:undefined
+  return {version:1,discoveryRequired:true,revision:0,sections,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
 }
 function assertFresh(p:Project,s:ConstructionState) {
   if(s.projectId!==p.id || s.sequenceId!==(p.sequence?.id??'main') || (s.applied?.fingerprint??s.fingerprint)!==constructionFingerprint(p)) throw new Error('Timeline changed: construction is stale. Re-map the current timeline before editing.')
@@ -173,6 +192,25 @@ function validateRecords(s:ConstructionState) {
     if(!inside(c,mergeRanges(receipts.filter(i=>i.audio && i.frames.length).map(i=>({start:i.start,end:i.end}))))) throw new Error('Inspection must cover the range with both visual frames and audio analysis')
   }
   if(s.contextInspections!==undefined) z.array(z.object({cutId:id,storySignature:id})).max(1000).parse(s.contextInspections)
+  if(s.sections) {
+    const sections=s.sections
+    if(sections.context.length>2000||sections.editing.length>12000)throw new Error('Section budget exceeded')
+    for(const c of sections.context){
+      range.parse(c)
+      if(!inside(c,s.scope))throw new Error('Context section escaped original timeline scope')
+      if(c.indexed){
+        if(!c.summary?.trim()||!c.evidenceIds?.length)throw new Error('Banked context section lacks grounded evidence')
+        if(c.evidenceIds.some(id=>!s.inspections.some(i=>i.id===id)))throw new Error('Banked context section uses unknown inspection receipts')
+      }
+    }
+    for(const c of sections.editing){
+      range.parse(c)
+      if(!inside(c,s.scope)||c.contextIds?.some(id=>!sections.context.some(x=>x.id===id)))
+        throw new Error('Edit section escaped original timeline or references unknown bank context')
+      if(c.planned && (!c.summary?.trim()||!c.evidenceIds?.length))
+        throw new Error('Planned edit section needs grounded reasoning and receipts')
+    }
+  }
   if(s.discoveryScans?.length) {
     if(s.discoveryScans.length>3000)throw new Error('Discovery scan limit reached')
     for(const scan of s.discoveryScans) {
@@ -202,6 +240,10 @@ export function validateConstructionCuts(p:Project,s:ConstructionState):Construc
   if(s.applied) throw new Error('This construction pass was already applied')
   if(s.paused) throw new Error('Construction is paused; resume explicitly before applying')
   validateRecords(s)
+  if(s.sections?.context.some(x=>!x.indexed))
+    throw new Error('Bank the complete authorised timeline context before applying any cuts')
+  if(s.sections?.editing.some(x=>!x.planned))
+    throw new Error('Plan every local editing section with access to the global context bank before applying cuts')
   if(uncoveredRanges(s).length) throw new Error('Investigate missing audiovisual coverage before cutting')
   if((s.discoveryRequired || s.discoveryScans?.length) && unscannedDiscoveryRanges(s).length)
     throw new Error('Complete the original timeline discovery scan before cutting; candidate search is only partially indexed')
@@ -246,6 +288,11 @@ export function constructionStatus(p:Project,s:ConstructionState) {
   }
   const unscanned=(s.discoveryRequired||s.discoveryScans?.length)?unscannedDiscoveryRanges(s):[]
   if(unscanned.length)return {stage:'discover',complete:false,uncovered:unscanned,next:'Finish indexing the original timeline event candidates before proposing removals'}
+  if(s.sections?.context.some(x=>!x.indexed))return {
+    stage:'context-bank',complete:false,
+    uncovered:s.sections.context.filter(x=>!x.indexed).map(x=>({start:x.start,end:x.end})),
+    next:'Bank the full authorised recording in evidence-backed sections before planning local edits'
+  }
   const uncovered=uncoveredRanges(s)
   return {stage:uncovered.length?'investigate':s.beats.length?'refine':'map',complete:false,uncovered,next:uncovered.length?'Inspect uncovered timeline ranges with audio and pictures':s.beats.length?'Refine scene cuts, call inspect_cut_context for each cut, inspect neighbouring frames and validate dialogue boundaries':'Map chapters, scenes, setups, payoffs and their dependencies'}
 }
