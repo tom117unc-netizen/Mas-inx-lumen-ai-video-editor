@@ -1,6 +1,12 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { Project } from '@/editor/types'
-vi.mock('@/engine/stills',()=>({timelineStills:async(_p:Project,frames:number[],width:number)=>frames.map(()=>({width,height:width*9/16})),canvasBase64:()=> 'image',contactSheet:()=>({}),mediaStills:()=>[]}))
+vi.mock('@/engine/stills',()=>({timelineStills:async(_p:Project,frames:number[],width:number)=>frames.map((f)=>({
+ width,height:Math.round(width*9/16),
+ getContext:()=>({getImageData:()=>{const data=new Uint8ClampedArray(width*Math.round(width*9/16)*4)
+  // Contrasting scene after 3 seconds; no claim that this is a meaningful event.
+  for(let i=0;i<data.length;i+=4){const v=f>=90?255:0;data[i]=v;data[i+1]=v;data[i+2]=v;data[i+3]=255}
+  return {data}}}),
+})),canvasBase64:()=> 'image',contactSheet:()=>({}),mediaStills:()=>[]}))
 vi.mock('@/project/session',()=>({useSession:{getState:()=>({path:'/test.lumen'})},saveProject:async()=>true,isDirty:()=>false}))
 const audioMock=vi.hoisted(()=>({click:false}))
 vi.mock('@/engine/audio-engine',async original=>({...await original<typeof import('@/engine/audio-engine')>(),prepareAudio:async()=>{},renderMix:async(_p:Project,from:number,to:number,opts?:{sampleRate?:number})=>{
@@ -148,4 +154,44 @@ it('refuses unbounded or out-of-scope audio uploads',async()=>{
  await expect(run('inspect_construction_audio',{start_frame:0,end_frame:500,purpose:'listen'})).rejects.toThrow(/scope|12/i)
  await expect(run('inspect_construction_audio',{start_frame:0,end_frame:300,purpose:'listen'})).toBeTruthy()
  await expect(run('inspect_construction_audio',{start_frame:0,end_frame:0,purpose:'listen'})).rejects.toThrow()
+})
+
+it('indexes audiovisual event candidates from ONLY the current timeline and survives reload',async()=>{
+ await run('begin_video_construction',{goal:'Find game events before deleting anything'})
+ const first=await run('scan_construction_events',{start_frame:0,end_frame:150}) as any
+ expect(first.scan_id).toBeTruthy()
+ expect(first.visual_samples).toBeGreaterThan(3)
+ expect(first.candidates.some((x:any)=>x.signal==='visual-change')).toBe(true)
+ expect(first.candidates.every((x:any)=>x.start>=0&&x.end<=150)).toBe(true)
+ expect(await run('get_video_construction')).toMatchObject({
+   status:{stage:'discover'},discoveryScans:{total:1},discoveryEvents:{total:first.candidates.length}
+ })
+ const repeated=await run('scan_construction_events',{start_frame:0,end_frame:150}) as any
+ expect(repeated).toMatchObject({scan_id:first.scan_id,reused:true})
+ await expect(run('scan_construction_events',{start_frame:120,end_frame:180})).rejects.toThrow(/overlap/i)
+ await run('scan_construction_events',{start_frame:150,end_frame:300})
+ const after=await run('get_video_construction') as any
+ expect(after.discoveryScans.total).toBe(2)
+ expect(after.status.stage).toBe('investigate')
+ const reloaded=JSON.parse(JSON.stringify(getProject()))
+ useEditor.getState().loadProject(reloaded)
+ expect((await run('get_video_construction') as any).discoveryEvents.total).toBeGreaterThan(0)
+})
+it('refuses to dismiss unexamined discovered events',async()=>{
+ await run('begin_video_construction',{goal:'Review all potential events'})
+ const result=await run('scan_construction_events',{start_frame:0,end_frame:300}) as any
+ const event=result.candidates.find((x:any)=>x.signal==='visual-change')
+ expect(event).toBeDefined()
+ await expect(run('review_discovered_event',{event_id:event.id,decision:'discard',
+   reason:'The inspected action is ordinary repeated waiting, not a protected setup.',
+   inspection_ids:[]})).rejects.toThrow(/inspect/i)
+ const view=await run('inspect_video_range',{start_frame:event.start,end_frame:event.end,mode:'overview'}) as any
+ expect(await run('review_discovered_event',{event_id:event.id,decision:'discard',
+   reason:'This particular visual switch is a menu that carries no setup or relevant action.',
+   inspection_ids:[view.json.inspection_id]})).toMatchObject({saved:true,decision:'discard'})
+ const s=getProject().construction!
+ expect(s.discoveryEvents?.find(x=>x.id===event.id)?.inspectionIds).toEqual([view.json.inspection_id])
+ await expect(run('review_discovered_event',{event_id:'fake',decision:'discard',
+   reason:'The event was not observed, so no decision is possible.',
+   inspection_ids:[view.json.inspection_id]})).rejects.toThrow(/unknown/i)
 })
