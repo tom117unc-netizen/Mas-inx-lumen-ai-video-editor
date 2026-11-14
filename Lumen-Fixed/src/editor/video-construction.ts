@@ -7,6 +7,7 @@ import type { JoinAudioReport } from './construction-join-audio'
 import type { EventSignal } from './construction-event-index'
 import { planConstructionSections, type BankedSection, type PlannedSection } from './construction-sections'
 import type { ImmutableSourceManifest, SourceSelection, SourceClipMap, SelectionOutputMap } from './construction-assembler'
+import type { NarrativeMoment, MappedNarrativeMoment } from './construction-narrative'
 import { projectFingerprint } from './anime-review-approval'
 
 const frame = z.number().int().nonnegative()
@@ -49,9 +50,10 @@ export interface ConstructionState {
   previousAssemblies?:{sequenceId:string;issues:string[];sourceFingerprint:string}[]
   /** Keep-first editable source selections, ordered as intended in the output. */
   sourceSelections?:SourceSelection[]
+  narrativeMoments?:NarrativeMoment[]
   /** Reversible source to output map for precise reconstruction and review. */
   assembly?:{sequenceId:string;sourceSequenceId:string;sourceFingerprint:string;
-    selections:SelectionOutputMap[];clips:SourceClipMap[];outputFrames:number}
+    selections:SelectionOutputMap[];clips:SourceClipMap[];moments:MappedNarrativeMoment[];outputFrames:number}
   sections?:ConstructionSectionPlan;
   version:1; paused?:boolean; discoveryRequired?:boolean; revision?:number; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
   coverage:z.infer<typeof coverageSchema>[];beats:StoryBeat[];cuts:ConstructionCut[];inspections:InspectionReceipt[];
@@ -123,7 +125,7 @@ export function beginConstruction(p:Project,goal:string,sectioned=false):Constru
     editTargetFrames:scheduled.editTargetFrames,
     context:scheduled.context,editing:scheduled.editing,reads:[],
   }:undefined
-  return {version:1,discoveryRequired:true,revision:0,sections,sourceManifest,sourceSelections:[],projectId:p.id,sequenceId:p.sequence?.id??'seq_main',fingerprint,goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
+  return {version:1,discoveryRequired:true,revision:0,sections,sourceManifest,sourceSelections:[],narrativeMoments:[],projectId:p.id,sequenceId:p.sequence?.id??'seq_main',fingerprint,goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
 }
 function assertFresh(p:Project,s:ConstructionState) {
   const requiredSequence=s.assembly&&s.applied?s.assembly.sequenceId:s.sequenceId
