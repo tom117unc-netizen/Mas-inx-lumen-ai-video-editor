@@ -56,6 +56,15 @@ export class WithImages {
 
 export const withImages = (json: unknown, images: ToolImage[]) => new WithImages(json, images)
 
+/** Transport a short, user-requested timeline audio sample to an audio-capable
+ * model. Delivery is separate from the JSON report; a receipt is not hearing.
+ */
+export interface ToolAudio { data:string; mimeType:'audio/wav' }
+export class WithAudio {
+  constructor(readonly json:unknown, readonly audio:ToolAudio) {}
+}
+export const withAudio=(json:unknown,audio:ToolAudio)=>new WithAudio(json,audio)
+
 // ─── Arguments ───────────────────────────────────────────────────────────
 
 export const has = (a: ToolArgs, key: string) => a[key] !== undefined && a[key] !== null
