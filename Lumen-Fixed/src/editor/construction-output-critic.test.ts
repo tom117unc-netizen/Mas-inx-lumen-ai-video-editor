@@ -1,5 +1,7 @@
 import {describe,expect,it} from 'vitest'
 import {auditOutputNarrative} from './construction-output-critic'
+import {createEmptyProject} from './new-project'
+import {constructionFingerprint,constructionStatus} from './video-construction'
 import type {ConstructionState} from './video-construction'
 
 function fixture():ConstructionState {
@@ -75,6 +77,20 @@ describe('skeptical independent structural critic of published video',()=>{
     expect(auditOutputNarrative(s).issues.join(' ')).toMatch(/no source-grounded narrative moment ledger/i)
     s.assembly!.selections=[{selectionId:'all',role:'complete',beatId:'all',sourceStart:0,sourceEnd:140,outputStart:0,outputEnd:140}]
     expect(auditOutputNarrative(s).issues).toEqual([])
+  })
+  it('does not trust earlier self-certified output reviews without the independent audit version',()=>{
+    const p=createEmptyProject('Persisted assembled output')
+    const s=fixture()
+    s.projectId=p.id
+    s.sequenceId=p.sequence?.id??'seq_main'
+    s.fingerprint=constructionFingerprint(p)
+    s.assembly!.sequenceId=s.sequenceId
+    s.applied!.fingerprint=constructionFingerprint(p)
+    s.review={fingerprint:s.applied!.fingerprint,joins:s.applied!.joins,story:'Story looks good',
+      pacing:'Pacing looks good',issues:[]}
+    expect(constructionStatus(p,s).complete).toBe(false)
+    s.review.outputAuditVersion=1
+    expect(constructionStatus(p,s).complete).toBe(true)
   })
   it('is unavailable for legacy cut-only construction (and never certifies semantic listening)',()=>{
     const s=fixture()
