@@ -208,6 +208,8 @@ function withMedia(messages: ModelMessage[], pictures: Map<string, Picture[]>, a
   const pics = last.content.flatMap((part) => (part.type === 'tool-result' ? (pictures.get(part.toolCallId) ?? []) : []))
   const audio = last.content.flatMap((part) => (part.type === 'tool-result' ? (audioSamples.get(part.toolCallId) ?? []) : []))
   if (!pics.length && !audio.length) return undefined
+  // The WAV bytes are needed only in this model step, not in the next batch.
+  for(const part of last.content) if(part.type==='tool-result') audioSamples.delete(part.toolCallId)
   const earlier = messages.map((m) => (isPictureMessage(m) ? { role: 'user' as const, content: [{ type: 'text' as const, text: '[Earlier pictures — no longer attached.]' }] } : m))
   return [...earlier, { role: 'user', content: [{ type: 'text', text: PICTURES_NOTE }, ...pics.map((p) => ({ type: 'image' as const, image: p.data, mediaType: p.mimeType })), ...audio.map(a=>({type:'file' as const,data:a.data,mediaType:a.mimeType}))] }]
 }
