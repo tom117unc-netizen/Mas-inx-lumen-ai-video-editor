@@ -181,6 +181,63 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     },
   },
   {
+    name:'get_discovery_queue',
+    description:'Retrieve a small, PRIORITIZED queue of unresolved discovered events. Events inside proposed removals rank first; then audio/visual changes, existing clip boundaries and transcripts. Ranking is an investigation priority only, NEVER a claim that a moment is funny or safe to delete. Use this instead of paging thousands of raw index events.',
+    inputSchema:obj({cut_id:str('Optional proposed cut ID; show ONLY unresolved candidates intersecting that cut'),
+      offset:int('Queue page offset, default 0',{minimum:0}),
+      limit:int('Candidates returned, default 25, max 60',{minimum:1,maximum:60})}),
+    run:async a=>{
+      const s=state(),offset=z.number().int().min(0).parse(a.offset??0),limit=z.number().int().min(1).max(60).parse(a.limit??25)
+      const cutId=z.string().trim().optional().parse(a.cut_id)
+      const focus=cutId?s.cuts.find(c=>c.id===cutId):undefined
+      if(cutId&&!focus)throw new Error('Unknown cut ID for discovery queue')
+      const intersects=(a:{start:number;end:number},b:{start:number;end:number})=>a.start<b.end&&b.start<a.end
+      const pending=(s.discoveryEvents??[]).filter(e=>(!e.decision||e.decision==='uncertain')&&(!focus||intersects(e,focus)))
+      const ranked=pending.map(e=>{
+        const cutIds=s.cuts.filter(c=>intersects(e,c)).map(c=>c.id)
+        const base={ 'visual-change':85,'audio-onset':80,'audio-drop':75,'clip-boundary':65,'speech':45 }[e.signal]
+        const priority=base+Math.round(20*e.strength)+(cutIds.length?1000:0)
+        return {id:e.id,signal:e.signal,start:e.start,end:e.end,priority,cut_ids:cutIds,
+          description:e.description,source_clip_ids:e.sourceClipIds,decision:e.decision??'pending',
+          note:cutIds.length?'Candidate intersects a planned deletion; review before cutting':'Potential context lead; inspect if it may matter'}
+      }).sort((x,y)=>y.priority-x.priority||x.start-y.start)
+      return {total:ranked.length,items:ranked.slice(offset,offset+limit),
+        next_offset:offset+limit<ranked.length?offset+limit:null,
+        note:'Priority measures evidence uncertainty and proposed edit risk, not narrative value or humour. Continue discovery of unscanned timeline ranges in parallel.'}
+    },
+  },
+  {
+    name:'review_discovered_events',
+    description:'Atomically resolve up to 20 indexed candidates after examining each entire interval. Each decision requires its own real inspection receipt and clear editorial rationale. If any candidate is invalid, none of the decisions are persisted. Helps process busy long-form footage with fewer model/tool calls.',
+    inputSchema:obj({decisions:list('Evidence-based candidate reviews',obj({
+      event_id:str('Candidate ID'),decision:oneOf('Editorial decision',['keep','discard','uncertain']),
+      reason:str('Grounded observation; at least 20 characters'),
+      inspection_ids:list('Inspection receipt IDs covering this candidate',str('Receipt ID'),{minItems:1,maxItems:12}),
+    },['event_id','decision','reason','inspection_ids']),{minItems:1,maxItems:20})},['decisions']),
+    run:async a=>{
+      const s=state(),p=getProject()
+      if(s.applied||s.paused)throw new Error('Resume pre-edit construction before reviewing original events')
+      const schema=z.object({event_id:z.string().trim().min(1),
+        decision:z.enum(['keep','discard','uncertain']),
+        reason:z.string().trim().min(20).max(1500),inspection_ids:z.array(z.string().min(1)).min(1).max(12)})
+      const decisions=z.array(schema).min(1).max(20).parse(a.decisions)
+      if(new Set(decisions.map(d=>d.event_id)).size!==decisions.length)throw new Error('Duplicate event in one review batch')
+      const next=structuredClone(s),seen:string[]=[]
+      for(const decision of decisions) {
+        const event=next.discoveryEvents?.find(e=>e.id===decision.event_id)
+        if(!event)throw new Error(`Unknown discovery event ${decision.event_id}; no decisions were saved`)
+        const receipts=s.inspections.filter(i=>decision.inspection_ids.includes(i.id)&&i.audio&&i.frames.length)
+        if(!receipts.some(i=>i.start<=event.start&&i.end>=event.end))
+          throw new Error(`Missing complete audiovisual inspection of event ${event.id}; no decisions were saved`)
+        event.decision=decision.decision;event.decisionReason=decision.reason;event.inspectionIds=decision.inspection_ids
+        seen.push(event.id)
+      }
+      if(constructionFingerprint(p)!==s.fingerprint)throw new Error('Indexed timeline changed; discard this review batch')
+      await persist(next)
+      return {saved:true,reviewed:seen,remaining:(next.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length}
+    },
+  },
+  {
     name:'review_discovered_event',
     description:'Resolve one event candidate after actually inspecting the surrounding current-timeline footage. Mark keep, discard or uncertain with a specific evidence-based reason; unknown or uncertain events cannot be removed by planned cuts. Discard requires a fresh inspection covering the candidate range. Only use this on pre-apply original timeline.',
     inputSchema:obj({event_id:str('Discovery event ID'),
