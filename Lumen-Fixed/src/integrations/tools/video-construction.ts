@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { assertDiscoveryDecisionEvidence, beginConstruction, constructionFingerprint, constructionStatus, constructionStorySignature, mergeRanges, unscannedDiscoveryRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
 import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-event-index'
 import { nextContextInspectionProbe, planConstructionSections, selectBankContext } from '@/editor/construction-sections'
+import { composeKeepFirstSequence, validateKeepFirstSelections, validateOutputSourceMap } from '@/editor/construction-assembler'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
@@ -96,7 +97,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const pending=s.sections?.context.find(x=>!x.indexed)
       const sectionReceipts=pending?s.inspections.filter(i=>i.audio&&i.frames.length&&i.start<pending.end&&i.end>pending.start):[]
       const nextContextProbe=pending?nextContextInspectionProbe(pending,sectionReceipts,Math.round(s.fps*60)):null
-      return {goal:s.goal,fps:s.fps,revision:s.revision??0,
+      return {goal:s.goal,fps:s.fps,revision:s.revision??0,source_manifest:s.sourceManifest?{sequence_id:s.sourceManifest.sequenceId,fingerprint:s.sourceManifest.fingerprint,source_clips:Object.keys(s.sourceManifest.clips).length}:null,sourceSelections:page(s.sourceSelections??[]),assembly:s.assembly?{sequence_id:s.assembly.sequenceId,source_sequence_id:s.assembly.sourceSequenceId,output_frames:s.assembly.outputFrames,selected_spans:page(s.assembly.selections),source_clips:page(s.assembly.clips)}:null,
         next_context_section:pending??null,
         next_context_probe:nextContextProbe?{section_id:pending!.id,...nextContextProbe}:null,
         next_context_inspection_ids:sectionReceipts.map(i=>i.id).slice(0,64),
@@ -516,6 +517,87 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     description:'Plan a frame-exact bisection probe for a single bracketed visual state change. First inspect both endpoints. Use only when the interval has one change; for repeats or unknown behaviour scan shorter windows instead. It plans the next frame and does not observe the event itself.',
     inputSchema:obj({left_frame:frame,right_frame:frame,left_present:bool('Observed state at left'),right_present:bool('Observed state at right'),single_change:bool('The inspected interval supports one change, not repeated appearances')},['left_frame','right_frame','left_present','right_present','single_change']),
     run:async a=>nextEventProbe(z.number().parse(a.left_frame),z.number().parse(a.right_frame),z.boolean().parse(a.left_present),z.boolean().parse(a.right_present),z.boolean().parse(a.single_change)),
+  },
+  {
+    name:'record_keep_first_selections',
+    description:'Select ORIGINAL timeline moments for a NEW video in intentional output order. Upsert up to 30 per call using real inspected time ranges, story beats and provenance; never add media. Keep entire jokes, setups, payoffs and the ending. This plans a reversible edit; it does NOT remove source footage.',
+    inputSchema:obj({selections:list('Source-backed selections',obj({
+      id:str('Stable source selection ID'),start_frame:frame,end_frame:frame,
+      output_order:int('Position in final output, 0 based; globally unique',{minimum:0}),
+      role:oneOf('Editorial role',['hook','setup','scene','escalation','payoff','callback','ending','complete']),
+      beat_id:str('Grounded original story beat ID'),
+      reason:str('Why this moment belongs in the video',{minLength:20,maxLength:2000}),
+      inspection_ids:list('Real original audiovisual inspection receipt IDs',str('Receipt ID'),{minItems:1,maxItems:64}),
+    },['id','start_frame','end_frame','output_order','role','beat_id','reason','inspection_ids']),{minItems:1,maxItems:30}),
+      remove_ids:list('Obsolete selection IDs to remove',str('ID'),{maxItems:100})},['selections']),
+    run:async args=>{
+      const s=state()
+      if(s.applied||s.paused||!s.sourceManifest)throw new Error('Original source selection must be active and not yet published')
+      if(s.sections?.context.some(c=>!c.indexed)||s.sections?.editing.some(c=>!c.planned))
+        throw new Error('Complete whole-video context and local section editing plans before selecting the final sequence')
+      const input=z.array(z.object({id:z.string().trim().min(1).max(128),
+        start_frame:z.number().int().nonnegative(),end_frame:z.number().int().positive(),
+        output_order:z.number().int().nonnegative(),
+        role:z.enum(['hook','setup','scene','escalation','payoff','callback','ending','complete']),
+        beat_id:z.string().trim().min(1),reason:z.string().trim().min(20).max(2000),
+        inspection_ids:z.array(z.string().min(1)).min(1).max(64)})).min(1).max(30).parse(args.selections)
+      const removed=z.array(z.string()).max(100).parse(args.remove_ids??[])
+      if(new Set(input.map(x=>x.id)).size!==input.length)throw new Error('Duplicate selection in batch')
+      const old=(s.sourceSelections??[]).filter(x=>!removed.includes(x.id))
+      const nextItems=new Map(old.map((x,i)=>[x.id,{...x,outputOrder:x.outputOrder??i}]))
+      for(const x of input){
+        if(x.end_frame<=x.start_frame||!s.scope.some(r=>x.start_frame>=r.start&&x.end_frame<=r.end))
+          throw new Error('Selection cannot use empty or unauthorised timeline footage')
+        if(!s.beats.some(b=>b.id===x.beat_id&&b.start<x.end_frame&&x.start_frame<b.end))
+          throw new Error('Selection must overlap a verified story beat')
+        const seen=s.inspections.filter(i=>x.inspection_ids.includes(i.id)&&i.audio&&i.frames.length)
+        if(!mergeRanges(seen).some(r=>r.start<=x.start_frame&&r.end>=x.end_frame))
+          throw new Error('Selected original footage needs actual audiovisual inspection covering its full range')
+        nextItems.set(x.id,{id:x.id,start:x.start_frame,end:x.end_frame,role:x.role,
+          beatId:x.beat_id,reason:x.reason,evidenceIds:x.inspection_ids,outputOrder:x.output_order})
+      }
+      const sorted=[...nextItems.values()].sort((a,b)=>a.outputOrder-b.outputOrder||a.id.localeCompare(b.id))
+      if(new Set(sorted.map(x=>x.outputOrder)).size!==sorted.length)
+        throw new Error('Every selected moment must have a unique output_order')
+      const next=structuredClone(s);next.sourceSelections=sorted
+      await persist(next)
+      return {saved:true,source_sections:sorted.length,
+        ordered:sorted.map(x=>({id:x.id,start_frame:x.start,end_frame:x.end,role:x.role})).slice(0,100),
+        next:'Preview the exact source map before publishing the new editable sequence.'}
+    },
+  },
+  {
+    name:'preview_keep_first_assembly',
+    description:'Validate proposed source selections without changing any footage. Checks timeline permissions, protected events, source evidence, necessary earlier setups and final story order. Returns original-to-output frame mapping and precise timing.',
+    inputSchema:obj({name:str('Optional new sequence name')}),
+    run:async a=>{
+      const s=state()
+      const out=composeKeepFirstSequence(getProject(),s,typeof a.name==='string'?a.name:undefined)
+      validateOutputSourceMap(out,s.sourceManifest!)
+      return {valid:true,name:out.sequence.name,original_sequence_id:s.sourceManifest!.sequenceId,
+        selected_segments:out.selections,output_frames:out.outputFrames,
+        original_frames:out.originalFrames,join_frames:out.joins,
+        preserved_clips:out.clips.length,source_map_preview:out.clips.slice(0,20),
+        note:'A structurally verified assembly is not proof of humour, watchability or smooth audio. Publish only after narrative verification and review the output.'}
+    },
+  },
+  {
+    name:'publish_keep_first_assembly',
+    description:'Atomically publish the validated, keep-first source selections to a NEW editable timeline. Keep the entire ORIGINAL authorised timeline intact as another sequence. Save original clip identities, effects, group links and exact frame mappings. Publishing is one undo step; then inspect the real output and its joins before claiming completion.',
+    inputSchema:obj({name:str('Optional assembled sequence name')}),
+    run:async a=>{
+      const s=state()
+      validateKeepFirstSelections(getProject(),s)
+      const result=dispatch('construction.publishSelection',{
+        ...(typeof a.name==='string'?{name:a.name}:{}),
+      },{source:'ai'})
+      if(!result.ok)throw new Error(result.error)
+      if(!await saveProject())throw new Error('Output was created in memory but saving failed. Save the project before continuing.')
+      const published=state(false)
+      return {published:true,...(result.result as Record<string,unknown>),
+        status:constructionStatus(getProject(),published),
+        note:'Original footage is preserved in the original sequence; the new output timeline is open for post-edit review and can be undone as a single operation.'}
+    },
   },
   {
     name:'apply_video_construction',
