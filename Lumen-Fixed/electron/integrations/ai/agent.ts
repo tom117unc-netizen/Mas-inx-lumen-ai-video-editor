@@ -10,6 +10,7 @@ import { deleteHistory, readHistory, writeHistory } from './chats'
 import { effortSettings, geminiEfforts, openaiEfforts, type ModelApi } from './effort'
 import { forgetLocalSession, runLocal, stopLocal } from './local-agents'
 import { detailedProviderError } from './provider-error'
+import { createProviderProgressWindow } from './provider-progress-window'
 import { languageModel, listModels, MissingKeyError } from './providers'
 import { analyseWithVisionSidecar, selectVisionSidecar, VisionEvidenceCache } from './vision-sidecar'
 
@@ -311,8 +312,7 @@ async function runModel(req: AgentRunRequest) {
     for (;;) {
       // A single remote/model batch is deliberately limited. An interrupted
       // stream does not invalidate already-saved editor checkpoints.
-      const deadline=new AbortController()
-      const timer=setTimeout(()=>deadline.abort(new Error('Provider request exceeded its bounded execution window')),CONSTRUCTION_REQUEST_DEADLINE_MS)
+      const deadline=createProviderProgressWindow(CONSTRUCTION_REQUEST_DEADLINE_MS)
       const requestSignal=AbortSignal.any([controller.signal,deadline.signal])
       activeBatchSignal=requestSignal
       try {
@@ -344,27 +344,32 @@ async function runModel(req: AgentRunRequest) {
           switch (part.type) {
             case 'text-delta':
               if (!part.text) break
+              deadline.progress()
               emit({ type: 'text', delta: afterTool && wroteText ? `\n\n${part.text}` : part.text })
               wroteText = true
               afterTool = false
               break
             case 'reasoning-delta':
-              if (part.text) emit({ type: 'reasoning', delta: part.text })
+              if (part.text) { deadline.progress(); emit({ type: 'reasoning', delta: part.text }) }
               break
             case 'tool-call':
+              deadline.progress()
               if (isConstructionExecutionTool(part.toolName)) constructionActive = true
               afterTool = true
               emit({ type: 'tool-start', callId: part.toolCallId, tool: part.toolName, input: part.input })
               break
             case 'tool-result':
+              deadline.progress()
               emit({ type: 'tool-end', callId: part.toolCallId, tool: part.toolName, ok: true, summary: brief((part.output as ToolOutput | undefined)?.text ?? part.output) })
               break
             case 'tool-error':
+              deadline.progress()
               emit({ type: 'tool-end', callId: part.toolCallId, tool: part.toolName, ok: false, summary: brief(detailedProviderError(part.error)) })
               break
             case 'error':
               throw part.error
             case 'finish':
+              deadline.progress()
               usage = {
                 inputTokens:(usage?.inputTokens??0)+(part.totalUsage.inputTokens??0),
                 outputTokens:(usage?.outputTokens??0)+(part.totalUsage.outputTokens??0),
@@ -391,7 +396,7 @@ async function runModel(req: AgentRunRequest) {
             // request alive while hours of footage are being analysed. The AI
             // conversation remains open; the source job checkpoints each
             // completed section to disk and can resume after interruptions.
-            clearTimeout(timer)
+            deadline.close()
             emit({type:'status',message:'Indexing original footage locally; no AI model calls are required during this phase.'})
             let reportedPercent=-1
             try {
@@ -500,7 +505,7 @@ async function runModel(req: AgentRunRequest) {
         }
         throw err
       } finally {
-        clearTimeout(timer)
+        deadline.close()
       }
     }
   } catch (err) {
