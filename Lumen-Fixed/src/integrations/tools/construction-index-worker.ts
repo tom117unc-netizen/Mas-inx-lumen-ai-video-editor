@@ -131,6 +131,7 @@ async function run(job:LiveJob,scan:(from:number,to:number)=>Promise<{candidates
         events<=50?Math.min(Math.round(s.fps*60),Math.max(1,Math.round(job.maxFrames*1.5))):job.maxFrames
       job.attempted=0
     }catch(error){
+      if(job.cancelRequested){job.state='paused';return}
       const msg=error instanceof Error?error.message:String(error)
       const canSplit=/found \d+ distinct candidate events|split it into smaller/i.test(msg)
       if(canSplit&&job.maxFrames>Math.max(1,Math.round(s.fps))){
