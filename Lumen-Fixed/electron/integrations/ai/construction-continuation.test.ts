@@ -7,6 +7,8 @@ it('continues incomplete work only while it makes bounded progress',()=>{
  expect(constructionContinuation(snapshot,1,first.progress).continue).toBe(false)
  expect(constructionContinuation({...snapshot,inspections:{total:20}},1,first.progress).continue).toBe(true)
  expect(constructionContinuation({...snapshot,contextInspections:{total:1}},1,first.progress).continue).toBe(true)
+ expect(constructionContinuation({...snapshot,status:{stage:'discover',complete:false},discoveryScans:{total:1},discoveryEvents:{total:4},discoveryPending:4},1,first.progress).continue).toBe(true)
+ expect(constructionContinuation({...snapshot,status:{stage:'discover',complete:false},discoveryScans:{total:1},discoveryEvents:{total:4},discoveryPending:3},1,first.progress).continue).toBe(true)
  expect(constructionContinuation({...snapshot,joinAudioChecks:{total:1}},1,first.progress).continue).toBe(true)
  expect(constructionContinuation({...snapshot,audioObservations:{total:1}},1,first.progress).continue).toBe(true)
  expect(constructionContinuation(snapshot,12).continue).toBe(false)
