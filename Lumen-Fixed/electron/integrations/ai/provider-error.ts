@@ -68,6 +68,37 @@ function detailOf(err: ProviderError): string {
   return ''
 }
 
+/** A 200 response can still fail while reading the body or validating the model's
+ * schema. The AI SDK retains the real cause but normally hides it behind a generic
+ * "Failed to process successful response" message. Never print request URLs,
+ * request bodies, response headers or secrets in the visible diagnostic. */
+function safeCause(error: unknown): string {
+  const parts: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = (error as ProviderError | null)?.cause
+  for (let depth = 0; current && depth < 4 && !seen.has(current); depth++) {
+    seen.add(current)
+    if (typeof current === 'object') {
+      const cause = current as { message?: unknown; code?: unknown; cause?: unknown }
+      const msg = typeof cause.message === 'string' ? cause.message.trim() : ''
+      const code = typeof cause.code === 'string' && /^[A-Z][A-Z0-9_]{2,64}$/.test(cause.code) ? cause.code : ''
+      if (msg || code) {
+        const safe = msg
+          .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+          .replace(/\b(sk-[A-Za-z0-9_-]{8,})\b/g, '[redacted]')
+          .replace(/\b(api[_-]?key|token|authorization|password)\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+          .replace(/https?:\/\/[^\s]+/gi, '[redacted URL]')
+          .slice(0, 260)
+        parts.push([safe, code && !safe.includes(code) ? `(${code})` : ''].filter(Boolean).join(' '))
+      }
+      current = cause.cause
+    } else {
+      break
+    }
+  }
+  return parts.filter((x, i) => parts.indexOf(x) === i).join(' → ')
+}
+
 /**
  * Turns opaque SDK/provider failures such as `Bad Request` into a useful,
  * copyable diagnostic while redacting obvious credential fields.
@@ -78,6 +109,10 @@ export function detailedProviderError(error: unknown) {
   const code = statusOf(err)
   const detail = detailOf(err)
   const prefix = code ? `${code} ${base}` : base
+  if (code === 200 && /Failed to process successful response/i.test(base)) {
+    const why = safeCause(error)
+    return [prefix, why ? `Underlying response error: ${why}` : 'The provider response could not be read or decoded.', 'Previously completed editor tools may still be saved. Check construction status and resume; do not blindly replay edits.'].join('\n').slice(0, MAX_DETAIL)
+  }
   if (!detail || detail === base || prefix.includes(detail)) return prefix.slice(0, MAX_DETAIL)
   return `${prefix}\nProvider response: ${detail}`.slice(0, MAX_DETAIL)
 }

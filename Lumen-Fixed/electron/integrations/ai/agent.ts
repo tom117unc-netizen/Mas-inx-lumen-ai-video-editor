@@ -1,4 +1,7 @@
-import { dynamicTool, generateText, isStepCount, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
+import { constructionContinuation, isConstructionExecutionTool } from './construction-continuation'
+import { CONSTRUCTION_MICRO_STEPS, CONSTRUCTION_MAX_TRANSIENT_RETRIES, CONSTRUCTION_REQUEST_DEADLINE_MS, constructionRetryDelayMs, constructionTaskPrompt, isTransientConstructionError, waitForRetry } from './construction-task-chain'
+import { canReceiveTimelineAudio, validateAudioPayload } from './audio-transport'
+import { dynamicTool, generateText, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
 import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest } from '../../../shared/ai'
 import { IPC, type BridgeTool } from '../../../shared/integrations'
 import { callEditorTool, editorTools, editorWindow } from '../editor-rpc'
@@ -7,6 +10,7 @@ import { deleteHistory, readHistory, writeHistory } from './chats'
 import { effortSettings, geminiEfforts, openaiEfforts, type ModelApi } from './effort'
 import { forgetLocalSession, runLocal, stopLocal } from './local-agents'
 import { detailedProviderError } from './provider-error'
+import { createProviderProgressWindow } from './provider-progress-window'
 import { languageModel, listModels, MissingKeyError } from './providers'
 import { analyseWithVisionSidecar, selectVisionSidecar, VisionEvidenceCache } from './vision-sidecar'
 
@@ -77,6 +81,7 @@ interface Picture {
   data: string
   mimeType: string
 }
+interface AudioSnippet {data:string;mimeType:'audio/wav'}
 
 interface ToolOutput {
   text: string
@@ -84,7 +89,7 @@ interface ToolOutput {
   delivery: 'text' | 'follow' | 'native'
 }
 
-const PICTURES_NOTE = 'The pictures from the tools you just called:'
+const PICTURES_NOTE = 'Media evidence from the tools you just called; audio must be directly interpreted before reporting sound events:'
 const FOLLOWS_NOTE = '[The picture follows in the next message.]'
 const DROPPED_NOTE = '[picture — not kept]'
 const textOnly = new Set<string>()
@@ -95,6 +100,7 @@ function isPictureMessage(m: ModelMessage) {
 }
 
 const isImageType = (mediaType: unknown) => typeof mediaType === 'string' && mediaType.startsWith('image')
+const isAudioType = (mediaType: unknown) => typeof mediaType === 'string' && mediaType.startsWith('audio/')
 
 function stripPictures(messages: ModelMessage[]): ModelMessage[] {
   return messages.map((m) => {
@@ -106,13 +112,13 @@ function stripPictures(messages: ModelMessage[]): ModelMessage[] {
           if (part.output.type === 'text') return part.output.value.includes(FOLLOWS_NOTE) ? { ...part, output: { ...part.output, value: part.output.value.replace(FOLLOWS_NOTE, DROPPED_NOTE) } } : part
           if (part.output.type !== 'content') return part
           const value = part.output.value.map((v) =>
-            (v.type === 'file' || v.type === 'image-data' || v.type === 'file-data') && isImageType(v.mediaType) ? { type: 'text' as const, text: DROPPED_NOTE } : v,
+            (v.type === 'file' || v.type === 'image-data' || v.type === 'file-data') && (isImageType(v.mediaType) || isAudioType(v.mediaType)) ? { type: 'text' as const, text: DROPPED_NOTE } : v,
           )
           return { ...part, output: { ...part.output, value } }
         }),
       }
     }
-    if (m.role === 'user' && Array.isArray(m.content) && m.content.some((c) => c.type === 'image' || (c.type === 'file' && isImageType(c.mediaType)))) {
+    if (m.role === 'user' && Array.isArray(m.content) && m.content.some((c) => c.type === 'image' || (c.type === 'file' && (isImageType(c.mediaType) || isAudioType(c.mediaType))))) {
       return { ...m, content: m.content.filter((c) => c.type === 'text') }
     }
     return m
@@ -157,8 +163,12 @@ function isEffortRejection(err: unknown) {
 function buildTools(
   defs: BridgeTool[],
   pictures: Map<string, Picture[]>,
+  audioSamples: Map<string, AudioSnippet[]>,
+  audioSupported: boolean,
   modes: () => { native: boolean; vision: boolean },
   getAnalyse?: AgentVisualAnalyserFactory,
+  onToolExecution?: (toolName:string)=>void,
+  onEditorOperation?: (operation:Promise<unknown>)=>void,
 ): ToolSet {
   const tools: ToolSet = {}
   for (const def of defs) {
@@ -166,14 +176,23 @@ function buildTools(
       description: def.description,
       inputSchema: jsonSchema(cleanSchema(def.inputSchema)),
       execute: async (input, { toolCallId }): Promise<ToolOutput> => {
-        const res = await callEditorTool(def.name, (input ?? {}) as Record<string, unknown>)
+        onToolExecution?.(def.name)
+        const pending=callEditorTool(def.name, (input ?? {}) as Record<string, unknown>)
+        onEditorOperation?.(pending)
+        const res = await pending
         const text = res.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n')
         if (res.isError) throw new Error(text || 'The tool failed.')
         const pics = res.content.flatMap((c) => (c.type === 'image' ? [{ data: c.data, mimeType: c.mimeType }] : []))
+        const audio = res.content.flatMap(c=>c.type==='audio'?[{data:c.data,mimeType:c.mimeType}]:[])
+        if(audio.length) {
+          if(!audioSupported) throw new Error('This selected model cannot receive timeline audio. Choose a supported Gemini audio-understanding model in Lumen to listen; audio has not been interpreted.')
+          if(audio.length!==1)throw new Error('Audio evidence must contain exactly one WAV sample')
+          audioSamples.set(toolCallId,[validateAudioPayload(audio[0])])
+        } else audioSamples.delete(toolCallId)
         const prepared = await prepareAgentToolVisualOutput({ toolText: text, pictures: pics, ...modes(), getAnalyse })
         if (prepared.pictures.length) pictures.set(toolCallId, prepared.pictures)
         else pictures.delete(toolCallId)
-        return { text: prepared.text, pictures: prepared.pictures.length, delivery: prepared.delivery }
+        return { text: audio.length?`${prepared.text}\n\n[The captured WAV is attached to the next model step; analyse its actual sound, not only the transcript.]`:prepared.text, pictures: prepared.pictures.length, delivery: prepared.delivery }
       },
       toModelOutput: ({ toolCallId, output }) => {
         const out = output as ToolOutput
@@ -190,13 +209,16 @@ function buildTools(
   return tools
 }
 
-function withPictures(messages: ModelMessage[], pictures: Map<string, Picture[]>): ModelMessage[] | undefined {
+function withMedia(messages: ModelMessage[], pictures: Map<string, Picture[]>, audioSamples:Map<string,AudioSnippet[]>): ModelMessage[] | undefined {
   const last = messages[messages.length - 1]
   if (last?.role !== 'tool') return undefined
   const pics = last.content.flatMap((part) => (part.type === 'tool-result' ? (pictures.get(part.toolCallId) ?? []) : []))
-  if (!pics.length) return undefined
+  const audio = last.content.flatMap((part) => (part.type === 'tool-result' ? (audioSamples.get(part.toolCallId) ?? []) : []))
+  if (!pics.length && !audio.length) return undefined
+  // The WAV bytes are needed only in this model step, not in the next batch.
+  for(const part of last.content) if(part.type==='tool-result') audioSamples.delete(part.toolCallId)
   const earlier = messages.map((m) => (isPictureMessage(m) ? { role: 'user' as const, content: [{ type: 'text' as const, text: '[Earlier pictures — no longer attached.]' }] } : m))
-  return [...earlier, { role: 'user', content: [{ type: 'text', text: PICTURES_NOTE }, ...pics.map((p) => ({ type: 'image' as const, image: p.data, mediaType: p.mimeType }))] }]
+  return [...earlier, { role: 'user', content: [{ type: 'text', text: PICTURES_NOTE }, ...pics.map((p) => ({ type: 'image' as const, image: p.data, mediaType: p.mimeType })), ...audio.map(a=>({type:'file' as const,data:a.data,mediaType:a.mimeType}))] }]
 }
 
 function trim(history: ModelMessage[]) {
@@ -220,7 +242,13 @@ async function runModel(req: AgentRunRequest) {
     let vision = canSee !== false && !textOnly.has(key)
     let effort = req.target.effort && !noEffort.has(key) ? req.target.effort : undefined
     const pictures = new Map<string, Picture[]>()
+    const audioSamples = new Map<string,AudioSnippet[]>()
+    const audioSupported=canReceiveTimelineAudio(provider,modelId)
+    let constructionActive=false
+    let anyEditorToolExecuted=false
+    const inFlightEditorOperations=new Set<Promise<unknown>>()
     const visionCache = new VisionEvidenceCache()
+    let activeBatchSignal:AbortSignal=controller.signal
     let analyserPromise: Promise<AgentVisualAnalyser | undefined> | undefined
     const getAnalyse: AgentVisualAnalyserFactory = () => {
       analyserPromise ??= (async () => {
@@ -236,20 +264,31 @@ async function runModel(req: AgentRunRequest) {
             pictures: sidecarPictures,
             cache: visionCache,
             run: async (messages) => {
+              const signal=activeBatchSignal
               const result = await generateText({
                 model: sidecar.model,
                 messages,
                 headers: sidecar.headers,
-                abortSignal: controller.signal,
+                abortSignal: signal,
               })
               return result.text
             },
           })
         return analyse
-      })().catch(() => undefined)
+      })().catch(() => {
+        // A transient sidecar deadline should not permanently disable visual
+        // inspection for the rest of a long construction run.
+        analyserPromise=undefined
+        return undefined
+      })
       return analyserPromise
     }
-    const tools = buildTools(await editorTools(), pictures, () => ({ native, vision }), getAnalyse)
+    const tools = buildTools(await editorTools(), pictures,audioSamples,audioSupported, () => ({ native, vision }), getAnalyse,
+      name=>{anyEditorToolExecuted=true;if(isConstructionExecutionTool(name))constructionActive=true},
+      pending=>{
+        inFlightEditorOperations.add(pending)
+        void pending.then(()=>inFlightEditorOperations.delete(pending),()=>inFlightEditorOperations.delete(pending))
+      })
 
     const stored = historyOf(req.conversationId)
     const history = native ? stripReasoning(stored) : stored
@@ -260,28 +299,44 @@ async function runModel(req: AgentRunRequest) {
     let afterTool = false
     let usage: { inputTokens?: number; outputTokens?: number } | undefined
     const retried = { pictures: false, effort: false }
+    let constructionBatches = 0
+    let constructionProgress: string | undefined
+    let transientRetries = 0
+    let currentHistory = history
+    let currentUser = user
     const carry = (steps: ModelMessage[]) => {
       const kept = stripPictures(steps)
       return native ? stripReasoning(kept) : kept
     }
 
     for (;;) {
+      // A single remote/model batch is deliberately limited. An interrupted
+      // stream does not invalidate already-saved editor checkpoints.
+      const deadline=createProviderProgressWindow(CONSTRUCTION_REQUEST_DEADLINE_MS)
+      const requestSignal=AbortSignal.any([controller.signal,deadline.signal])
+      activeBatchSignal=requestSignal
       try {
         const effortOpts = effortSettings(api, effort)
         const result = streamText({
           model,
           system: req.instructions ? `${COPILOT_INSTRUCTIONS}\n\n${req.instructions}` : COPILOT_INSTRUCTIONS,
-          messages: [...history, user, ...carried],
+          // The full chat is retained on disk, but construction micro-steps
+          // rebuild their working context from persistent editor state. This
+          // avoids sending an ever-growing transcript to every short call.
+          messages: [...(constructionActive && constructionBatches>0 ? [] : currentHistory), currentUser, ...carried],
           tools,
           headers,
           ...effortOpts,
           providerOptions: mergeOptions(effortOpts.providerOptions, thinkingOptions(api, modelId)) as ProviderOptions,
-          stopWhen: isStepCount(MAX_STEPS),
-          abortSignal: controller.signal,
+          stopWhen: ({ steps }) => steps.length >= (constructionActive ? CONSTRUCTION_MICRO_STEPS : MAX_STEPS),
+          abortSignal: requestSignal,
+          // Outer retries re-check durable editor state before repeating work;
+          // avoid SDK retries that could make an interrupted call opaque.
+          maxRetries:constructionActive?0:1,
           prepareStep: ({ messages, responseMessages }) => {
             completed = responseMessages as ModelMessage[]
-            if (native || !vision) return undefined
-            const next = withPictures(messages, pictures)
+            if (native || (!vision && !audioSupported)) return undefined
+            const next = withMedia(messages, pictures,audioSamples)
             return next ? { messages: next } : undefined
           },
         })
@@ -289,34 +344,98 @@ async function runModel(req: AgentRunRequest) {
           switch (part.type) {
             case 'text-delta':
               if (!part.text) break
+              deadline.progress()
               emit({ type: 'text', delta: afterTool && wroteText ? `\n\n${part.text}` : part.text })
               wroteText = true
               afterTool = false
               break
             case 'reasoning-delta':
-              if (part.text) emit({ type: 'reasoning', delta: part.text })
+              if (part.text) { deadline.progress(); emit({ type: 'reasoning', delta: part.text }) }
               break
             case 'tool-call':
+              deadline.progress()
+              if (isConstructionExecutionTool(part.toolName)) constructionActive = true
               afterTool = true
               emit({ type: 'tool-start', callId: part.toolCallId, tool: part.toolName, input: part.input })
               break
             case 'tool-result':
+              deadline.progress()
               emit({ type: 'tool-end', callId: part.toolCallId, tool: part.toolName, ok: true, summary: brief((part.output as ToolOutput | undefined)?.text ?? part.output) })
               break
             case 'tool-error':
+              deadline.progress()
               emit({ type: 'tool-end', callId: part.toolCallId, tool: part.toolName, ok: false, summary: brief(detailedProviderError(part.error)) })
               break
             case 'error':
               throw part.error
             case 'finish':
-              usage = { inputTokens: part.totalUsage.inputTokens, outputTokens: part.totalUsage.outputTokens }
+              deadline.progress()
+              usage = {
+                inputTokens:(usage?.inputTokens??0)+(part.totalUsage.inputTokens??0),
+                outputTokens:(usage?.outputTokens??0)+(part.totalUsage.outputTokens??0),
+              }
               break
           }
         }
         const steps = (await result.responseMessages) as ModelMessage[]
-        const next = trim(forHistory([...stored, user, ...carried, ...steps]))
+        // No raw image or WAV bytes need to survive a completed model step.
+        // Without this, multi-hour chains can retain hundreds of images in RAM.
+        pictures.clear()
+        audioSamples.clear()
+        visionCache.clear()
+        const next = trim(forHistory([...currentHistory, currentUser, ...carried, ...steps]))
         histories.set(req.conversationId, next)
         writeHistory(req.conversationId, next)
+        transientRetries=0
+        if (constructionActive) {
+          let report = await callEditorTool('get_construction_checkpoint', { limit: 5 })
+          let indexJob = (report.structuredContent as {indexing?:{state?:string;percent?:number;error?:string}}|undefined)?.indexing
+          if(!report.isError && (indexJob?.state==='running'||indexJob?.state==='pausing')) {
+            // The renderer's index worker is crunching original media locally.
+            // DO NOT spend provider steps polling it, and DO NOT keep a model
+            // request alive while hours of footage are being analysed. The AI
+            // conversation remains open; the source job checkpoints each
+            // completed section to disk and can resume after interruptions.
+            deadline.close()
+            emit({type:'status',message:'Indexing original footage locally; no AI model calls are required during this phase.'})
+            let reportedPercent=-1
+            try {
+              while(indexJob?.state==='running'||indexJob?.state==='pausing') {
+                await waitForRetry(2500,controller.signal)
+                report=await callEditorTool('get_construction_checkpoint',{limit:5})
+                if(report.isError)break
+                indexJob=(report.structuredContent as {indexing?:{state?:string;percent?:number;error?:string}}|undefined)?.indexing
+                const rounded=Math.floor((indexJob?.percent??0)/10)*10
+                if(rounded>reportedPercent){
+                  reportedPercent=rounded
+                  emit({type:'status',message:`Original footage indexing: ${Math.round(indexJob?.percent??0)}% saved.`})
+                }
+              }
+            } finally {
+              if(controller.signal.aborted) {
+                // User cancellation also stops the local indexing worker at
+                // the next safe boundary; it never starts an extra scan.
+                try {await callEditorTool('pause_construction_indexing',{})} catch{}
+              }
+            }
+            if(indexJob?.state==='completed')emit({type:'status',message:'Original footage index completed. Resuming source-grounded story analysis.'})
+          }
+          const decision = constructionContinuation(report.isError ? null : report.structuredContent, constructionBatches, constructionProgress)
+          if (decision.continue && !controller.signal.aborted) {
+            constructionBatches++
+            constructionProgress = decision.progress
+            currentHistory = next
+            currentUser = { role: 'user', content: constructionTaskPrompt(report.structuredContent) }
+            carried = []
+            completed = []
+            emit({ type: 'status', message: `Continuing saved video construction (batch ${constructionBatches + 1}).` })
+            continue
+          }
+          if (report.isError || report.structuredContent?.status && !(report.structuredContent.status as { complete?: boolean }).complete) {
+            const message = report.isError ? 'Construction status could not be verified. Do not treat this run as a completed video.' : decision.reason
+            emit({ type: 'text', delta: `\n\n${message}` })
+          }
+        }
         emit({ type: 'done', usage })
         return
       } catch (err) {
@@ -337,7 +456,56 @@ async function runModel(req: AgentRunRequest) {
           emit({ type: 'status', message: 'This model doesn’t take that effort setting — carrying on with its default.' })
           continue
         }
+        // A remote timeout does not necessarily cancel an IPC editor operation.
+        // Never run another task concurrently with an unconfirmed pending edit:
+        // it could produce a duplicate or race the persisted checkpoint.
+        if(inFlightEditorOperations.size && isTransientConstructionError(err,deadline.signal.aborted)) {
+          throw new Error('AI request was interrupted while an editor operation is still pending. Automatic retry is paused to avoid duplicate edits. Check the saved construction status and explicitly resume after the operation settles.')
+        }
+        // Before the first editor operation, retrying a failed initial provider
+        // request is safe: there is no tool side effect to repeat.
+        if(!constructionActive && !anyEditorToolExecuted && !wroteText &&
+           transientRetries<2 && isTransientConstructionError(err,deadline.signal.aborted)) {
+          transientRetries++
+          emit({type:'status',message:`Reconnecting to AI provider (attempt ${transientRetries}/2); no editing tools have run.`})
+          await waitForRetry(constructionRetryDelayMs(transientRetries,err),controller.signal)
+          carried=[]
+          completed=[]
+          continue
+        }
+        if(constructionActive && isTransientConstructionError(err,deadline.signal.aborted)) {
+          // The failed model call may already have edited and checkpointed a
+          // scene. Never replay its partial tool-call transcript: recover the
+          // saved state and request the next idempotent, bounded work unit.
+          const report=await callEditorTool('get_construction_checkpoint',{limit:5})
+          const snapshot=report.structuredContent as {status?:{stage?:string;complete?:boolean}}|undefined
+          if(!report.isError && snapshot?.status?.complete) {
+            // The last provider response was lost but the editor's persisted
+            // state confirms that all construction/review gates passed.
+            emit({type:'text',delta:'\n\nThe provider response was interrupted, but Lumen verified that video construction and its saved review are complete.'})
+            emit({type:'done',usage})
+            return
+          }
+          if(transientRetries<CONSTRUCTION_MAX_TRANSIENT_RETRIES && !report.isError && snapshot?.status?.stage &&
+             !['stale','paused','complete'].includes(snapshot.status.stage) &&
+             !snapshot.status.complete) {
+            transientRetries++
+            const delay=constructionRetryDelayMs(transientRetries,err)
+            emit({type:'status',message:`Temporary provider interruption. Saved construction is intact; retrying a small step (${transientRetries}/${CONSTRUCTION_MAX_TRANSIENT_RETRIES}).`})
+            await waitForRetry(delay,controller.signal)
+            pictures.clear()
+            audioSamples.clear()
+            visionCache.clear()
+            currentUser={role:'user',content:constructionTaskPrompt(report.structuredContent,
+              deadline.signal.aborted?'The previous short provider call hit its deadline':'The previous short provider call was interrupted')}
+            carried=[]
+            completed=[]
+            continue
+          }
+        }
         throw err
+      } finally {
+        deadline.close()
       }
     }
   } catch (err) {

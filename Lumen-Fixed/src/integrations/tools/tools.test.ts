@@ -280,3 +280,25 @@ describe('timeline and footage tools', () => {
     expect((await call('track_motion', { clip_id: id, box_fraction: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 } })).json.error).toMatch(/no video under this clip/)
   })
 })
+
+it('prevents bypassing an active construction plan with raw ripple or pause edits', async () => {
+  const { beginConstruction } = await import('@/editor/video-construction')
+  const p = getProject()
+  useEditor.setState({ project: { ...p, construction: beginConstruction(p, 'Coherent video') } })
+  const before = structuredClone(getProject().clips)
+  for (const name of ['timeline_removeRange', 'remove_pauses', 'batch_edit', 'cut_to_beats', 'detect_scenes', 'reframe', 'place_asset']) {
+    const result = await call(name, name === 'timeline_removeRange' ? { start: 10, end: 20 } : {})
+    expect(result.isError).toBe(true)
+    expect(result.json.error).toMatch(/construction/i)
+  }
+  expect(getProject().clips).toEqual(before)
+})
+
+it('keeps ordinary AI edits available after a paused plan becomes stale', async () => {
+  const { beginConstruction } = await import('@/editor/video-construction')
+  const p=getProject(),construction=beginConstruction(p,'Story');construction.paused=true
+  useEditor.setState({project:{...p,construction}})
+  const id=Object.values(getProject().clips)[0].id
+  expect((await call('clip_trim',{id,edge:'end',frame:290})).isError).not.toBe(true)
+  expect((await call('clip_trim',{id,edge:'end',frame:280})).isError).not.toBe(true)
+})

@@ -5,6 +5,7 @@
  * editor control (tools/control), plus the Blender / HyperFrames / media integrations.
  */
 import type { BridgeToolResult, Job, McpServerState } from '@shared/integrations'
+import { constructionStatus } from '@/editor/video-construction'
 import { commands, toolDefinitions, type CommandName } from '@/editor/commands'
 import { clipEnd, projectDuration } from '@/editor/ops'
 import { placeAsset } from '@/editor/placement'
@@ -26,13 +27,14 @@ import { CONTROL_TOOLS } from './tools/control'
 import { emitToolImages } from './tools/events'
 import { FOOTAGE_TOOLS } from './tools/footage'
 import { INSPECT_TOOLS } from './tools/inspect'
-import { bool, num, obj, oneOf, str, waitSeconds, withImages, WithImages, type AgentTool, type ToolContext, type ToolImage } from './tools/kit'
+import { bool, num, obj, oneOf, str, waitSeconds, withImages, WithImages, WithAudio, type AgentTool, type ToolContext, type ToolImage } from './tools/kit'
 import { VISION_TOOLS } from './tools/vision'
 import { BEAT_TOOLS } from './tools/beats'
 import { SKILL_TOOLS } from './tools/skills'
 import { SUBJECT_TOOLS } from './tools/subject'
 import { INGEST_TOOLS } from './tools/ingest'
 import { WEB_TOOLS } from './tools/web'
+import { VIDEO_CONSTRUCTION_TOOLS } from './tools/video-construction'
 import { ANIME_REVIEW_TOOLS } from './tools/anime-review'
 
 const PLACE = bool('Put the finished clip on the timeline at the playhead (default true).')
@@ -702,7 +704,7 @@ function mcpAgentTools(servers: Record<string, McpServerState>): AgentTool[] {
 
 let cache: AgentTool[] | null = null
 export function agentTools(servers: Record<string, McpServerState> = useIntegrations.getState().servers): AgentTool[] {
-  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...ANIME_REVIEW_TOOLS, ...editorTools()].filter((tool): tool is AgentTool => Boolean(tool && typeof tool.name === 'string'))
+  cache ??= [...INTEGRATION_TOOLS, ...VISION_TOOLS, ...INSPECT_TOOLS, ...CONTROL_TOOLS, ...FOOTAGE_TOOLS, ...WEB_TOOLS, ...SKILL_TOOLS, ...BEAT_TOOLS, ...SUBJECT_TOOLS, ...INGEST_TOOLS, ...ANIME_REVIEW_TOOLS, ...VIDEO_CONSTRUCTION_TOOLS, ...editorTools()].filter((tool): tool is AgentTool => Boolean(tool && typeof tool.name === 'string'))
   const mcp = mcpAgentTools(servers)
   return mcp.length ? [...cache, ...mcp] : cache
 }
@@ -711,14 +713,28 @@ export async function runAgentTool(name: string, args: Record<string, unknown>, 
   const tool = agentTools().find((t) => t.name === name)
   if (!tool) return { content: [{ type: 'text', text: `Unknown tool: ${name}. Call get_project to start; the tool list names every tool.` }], isError: true }
   try {
+    const project = getProject()
+    const construction = project.construction ? constructionStatus(project, project.construction) : undefined
+    const changesTimeline = editorTools().some(t => t.name === name) || [
+      'batch_edit', 'remove_pauses', 'cut_to_beats', 'place_asset', 'reframe',
+      'add_title', 'add_captions', 'duck_music', 'add_sound_effect', 'edit_timeline_marker',
+      'create_multicam', 'stabilize_clip', 'track_motion', 'cut_out_subject', 'undo', 'redo',
+      'render_3d_title', 'render_3d_background', 'render_blender_script', 'render_motion_graphic',
+      'render_hyperframes_html', 'generate_voiceover', 'generate_sound_effect', 'generate_music',
+      'generate_image', 'generate_video', 'ingest_start',
+    ].includes(name) || (name === 'detect_scenes' && args.action !== 'none')
+    if (construction && !construction.complete && project.construction?.paused !== true && changesTimeline) {
+      throw new Error('An unfinished video construction plan is active. Use its inspection, planning and apply_video_construction tools so coverage, dependencies and exact cut boundaries are checked. Pause construction explicitly to use ordinary AI edits; manual editor changes remain available.')
+    }
     const out = await tool.run(args ?? {}, ctx)
-    const result = out instanceof WithImages ? out.json : out
+    const result = out instanceof WithImages || out instanceof WithAudio ? out.json : out
     const structured = result && typeof result === 'object' && !Array.isArray(result) ? (result as Record<string, unknown>) : { result }
     const content: BridgeToolResult['content'] = [{ type: 'text', text: JSON.stringify(result, null, 2) }]
     if (out instanceof WithImages && out.images.length) {
       content.push(...out.images.map((img) => ({ type: 'image' as const, data: img.data, mimeType: img.mimeType })))
       emitToolImages(name, out.images)
     }
+    if (out instanceof WithAudio) content.push({type:'audio',data:out.audio.data,mimeType:out.audio.mimeType})
     return { content, structuredContent: structured }
   } catch (err) {
     return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true }

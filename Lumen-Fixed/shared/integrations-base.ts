@@ -405,7 +405,7 @@ export interface BridgeTool {
 
 /** An MCP CallToolResult, as the editor produces it. */
 export interface BridgeToolResult {
-  content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]
+  content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string } | { type: 'audio'; data: string; mimeType: 'audio/wav' })[]
   isError?: boolean
   structuredContent?: Record<string, unknown>
 }

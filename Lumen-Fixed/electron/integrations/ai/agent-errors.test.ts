@@ -27,6 +27,42 @@ describe('detailedProviderError', () => {
     expect(detailedProviderError(err)).toBe('400 maximum context length is 131072 tokens')
   })
 
+  it('explains HTTP 200 parsing failures using their nested SDK cause', () => {
+    const err = Object.assign(new Error('Failed to process successful response'), {
+      statusCode: 200,
+      cause: Object.assign(new TypeError('terminated'), {
+        cause: Object.assign(new Error('Body Timeout Error'), { code: 'UND_ERR_BODY_TIMEOUT' }),
+      }),
+    })
+    const message = detailedProviderError(err)
+    expect(message).toContain('200 Failed to process successful response')
+    expect(message).toContain('terminated')
+    expect(message).toContain('UND_ERR_BODY_TIMEOUT')
+    expect(message).toContain('resume')
+  })
+
+  it('explains malformed HTTP 200 without incorrectly calling it a network timeout', () => {
+    const err = Object.assign(new Error('Failed to process successful response'), {
+      statusCode: 200,
+      cause: new Error('Unexpected JSON response shape'),
+    })
+    const message = detailedProviderError(err)
+    expect(message).toContain('Unexpected JSON response shape')
+    expect(message).not.toContain('network timeout')
+  })
+
+  it('redacts secrets and provider URLs from nested causes', () => {
+    const err = Object.assign(new Error('Failed to process successful response'), {
+      statusCode: 200,
+      cause: new Error('Bearer sk-secret123456789 api_key=hidden-secret https://provider.example/path?token=private'),
+    })
+    const message = detailedProviderError(err)
+    expect(message).not.toContain('sk-secret123456789')
+    expect(message).not.toContain('hidden-secret')
+    expect(message).not.toContain('provider.example')
+    expect(message).toContain('[redacted]')
+  })
+
   it('redacts obvious credentials from provider payloads', () => {
     const err = Object.assign(new Error('Bad Request'), {
       statusCode: 400,

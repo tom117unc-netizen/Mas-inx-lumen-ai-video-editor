@@ -2,6 +2,8 @@ name: Anime review feature CI
 
 on:
   push:
+    branches: [feature/anime-review-update-02, feature/contextual-video-construction]
+  pull_request:
     branches: [feature/anime-review-update-02]
   workflow_dispatch:
 
