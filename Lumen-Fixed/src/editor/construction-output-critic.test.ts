@@ -27,8 +27,10 @@ function fixture():ConstructionState {
       {id:'end',kind:'round-end',start:110,end:120,description:'Round outcome',importance:'essential',confidence:'observed',evidenceIds:['source'],links:[{momentId:'start',relation:'answers'}]},
       {id:'finale',kind:'ending',start:125,end:130,description:'Meaningful ending',importance:'essential',confidence:'observed',evidenceIds:['source'],links:[]},
     ],
-    inspections:[{id:'output-inspection',start:0,end:145,audio:true,
-      frames:[16,42,118,132],transcript:true,mode:'overview'}],
+    inspections:[{id:'output-overview',start:0,end:145,audio:true,
+      frames:[16,42,118,132],transcript:true,mode:'overview'},
+      ...[16,42,118,132].map(frame=>({id:'focused-'+frame,start:frame-1,end:frame+2,
+        audio:true,frames:[frame-1,frame,frame+1],transcript:true,mode:'focused'}))],
   }
   return s as unknown as ConstructionState
 }
@@ -39,10 +41,10 @@ describe('skeptical independent structural critic of published video',()=>{
   })
   it('does not accept text claiming a good story if the round outcome was never inspected in the output',()=>{
     const s=fixture()
-    s.inspections[0].frames=[16,42,132]
+    s.inspections=s.inspections.filter(i=>i.id!=='focused-118')
     const report=auditOutputNarrative(s)
     expect(report.ok).toBe(false)
-    expect(report.issues).toEqual(expect.arrayContaining([expect.stringMatching(/round-end.*re-inspected.*end/i)]))
+    expect(report.issues).toEqual(expect.arrayContaining([expect.stringMatching(/round-end.*focused re-inspection.*end/i)]))
   })
   it('fails if a round has no preserved result even though its start and premise are present',()=>{
     const s=fixture()
