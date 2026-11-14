@@ -268,3 +268,34 @@ it('refuses sparse overview as discard evidence and accepts exact-priority focus
    reason:'Dense visual evidence directly shows a fixture transition with no necessary story content.',
    inspection_ids:[detail.json.inspection_id]})).toMatchObject({saved:true,decision:'discard'})
 })
+
+it('refuses to certify a new discovery scan when audible timeline speech has not been transcribed',async()=>{
+ const p=getProject(),clip=Object.values(p.clips)[0]
+ clip.assetId='speech-recording'
+ p.assets['speech-recording']={id:'speech-recording',name:'Recorded gameplay',kind:'video',
+  hasAudio:true,duration:10,addedAt:1,source:{type:'file',url:'file://speech.mp4',
+    fileName:'speech.mp4',mime:'video/mp4',size:1}}
+ useEditor.getState().loadProject(p)
+ await run('begin_video_construction',{goal:'Understand the recording before editing'})
+ expect(await run('get_video_construction')).toMatchObject({missing_timeline_transcripts:['speech-recording']})
+ await expect(run('scan_construction_events',{start_frame:0,end_frame:300})).rejects.toThrow(/transcrib/i)
+ expect((getProject().construction?.discoveryScans??[])).toHaveLength(0)
+ const next=structuredClone(getProject())
+ next.assets['speech-recording'].transcript=[{start:2,end:3,text:'There is a ghost nearby'}]
+ useEditor.getState().loadProject(next)
+ const scan=await run('scan_construction_events',{start_frame:0,end_frame:300}) as any
+ expect(scan.candidates.some((e:any)=>e.signal==='speech')).toBe(true)
+ expect((await run('get_video_construction') as any).missing_timeline_transcripts).toEqual([])
+})
+it('persists evidence revisions when rewriting a story beat without changing counts',async()=>{
+ await run('begin_video_construction',{goal:'Make a coherent game highlight'})
+ const first=(await run('get_video_construction') as any).revision
+ await run('update_video_construction',{beats:[{id:'opening',start:0,end:300,kind:'scene',summary:'A generic opening'}]})
+ const second=(await run('get_video_construction') as any).revision
+ await run('update_video_construction',{beats:[{id:'opening',start:0,end:300,kind:'scene',summary:'The rule explanation and first reaction'}]})
+ const last=(await run('get_video_construction') as any)
+ expect(second).toBe(first+1)
+ expect(last.revision).toBe(second+1)
+ expect(last.beats.total).toBe(1)
+ expect(last.beats.items[0].summary).toMatch(/rule explanation/)
+})
