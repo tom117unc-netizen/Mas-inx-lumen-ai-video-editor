@@ -1,14 +1,16 @@
 /** A stateful editorial workflow over the existing frame-based editor. */
 import { z } from 'zod'
 import { beginConstruction, constructionFingerprint, constructionStatus, constructionStorySignature, mergeRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
+import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-event-index'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
 import { assessVideoQuality, defaultVideoBrief } from '@/editor/video-quality'
 import { assessJoinAudio } from '@/editor/construction-join-audio'
-import { prepareAudio, renderMix } from '@/engine/audio-engine'
+import { levelFrames, prepareAudio, renderMix } from '@/engine/audio-engine'
 import { encodeWav } from '@/engine/wav'
 import { timelineStills, canvasBase64 } from '@/engine/stills'
+import { contentDelta, toHsv } from '@/engine/scenes'
 import { saveProject, useSession } from '@/project/session'
 import { INSPECT_TOOLS } from './inspect'
 import { bool, int, list, obj, oneOf, str, withAudio, withImages, type AgentTool } from './kit'
@@ -72,7 +74,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const s=state(false),offset=z.number().int().min(0).parse(a.offset??0),limit=z.number().int().min(1).max(100).parse(a.limit??40)
       const page=<T>(items:T[])=>({total:items.length,items:items.slice(offset,offset+limit),next_offset:offset+limit<items.length?offset+limit:null})
       const status=constructionStatus(getProject(),s)
-      return {goal:s.goal,fps:s.fps,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
+      return {goal:s.goal,fps:s.fps,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
     },
   },
   {
@@ -117,6 +119,93 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const receipt={id:uid('inspection'),start,end,frames,audio:true,transcript:transcript.length>0}
       const next=structuredClone(s);next.inspections.push(receipt);await persist(next)
       return withImages({inspection_id:receipt.id,frames,fps:p.settings.fps,start_frame:start,end_frame:end,mode,transcript,audio,audio_note:'Audio metrics are not listening: inspect transcript and visual action; mark delivery/game-sound interpretation uncertain unless directly supported.',coverage_note:mode==='overview'?'Sampled overview only. Investigate between samples for brief, silent or ambiguous events.':'Every frame in this short range is included.'},images.map(c=>({data:canvasBase64(c),mimeType:'image/jpeg' as const})))
+    },
+  },
+  {
+    name:'scan_construction_events',
+    description:'Auto-index up to 60 seconds of ORIGINAL current-timeline footage. Inspects sampled visual frame differences, rendered audio energy changes, timed speech and existing clip boundaries to find CANDIDATE events that need a closer look. No invented highlights, laughter recognition or game understanding. Persists signal provenance and discovery coverage; unresolved candidates block cuts that would delete them. Scan each chunk before final cuts, then inspect promising events individually.',
+    inputSchema:obj({...rangeFields},['start_frame','end_frame']),
+    run:async a=>{
+      const s=state(),p=getProject(),fingerprint=constructionFingerprint(p)
+      if(s.applied)throw new Error('Discovery must use the original timeline, before construction applies removals')
+      if(s.paused)throw new Error('Resume construction before discovering events')
+      const start=z.number().int().nonnegative().parse(a.start_frame),end=z.number().int().min(start+1).parse(a.end_frame)
+      const length=end-start
+      if(length>60*p.settings.fps)throw new Error('Event discovery max 60 seconds per bounded scan')
+      if(!s.scope.some(r=>start>=r.start&&end<=r.end))throw new Error('Discovery range is outside the authorized original timeline')
+      const exact=s.discoveryScans?.find(q=>q.start===start&&q.end===end)
+      if(exact)return {scan_id:exact.id,reused:true,candidates:(s.discoveryEvents??[]).filter(e=>e.scanId===exact.id),next:'Inspect any candidate that could affect an editorial decision'}
+      if(s.discoveryScans?.some(q=>start<q.end&&end>q.start))
+        throw new Error('Discovery scans cannot overlap. Use get_video_construction to identify the remaining unscanned interval')
+      if((s.discoveryScans?.length??0)>=3000)throw new Error('Discovery scan budget reached')
+      // Downsample deliberately: these are search signals, not a claim of watching every frame.
+      const step=Math.max(1,Math.round(p.settings.fps/2)),frames:number[]=[]
+      for(let f=start;f<end;f+=step)frames.push(f)
+      if(frames.at(-1)!==end-1)frames.push(end-1)
+      const visuals:{frame:number;score:number}[]=[]
+      let prior:Float32Array|null=null
+      for(let offset=0;offset<frames.length;offset+=16){
+        const window=frames.slice(offset,offset+16),canvases=await timelineStills(p,window,128)
+        for(let i=0;i<canvases.length;i++){
+          const canvas=canvases[i],ctx=canvas.getContext('2d',{willReadFrequently:true})
+          if(!ctx)throw new Error('Cannot measure rendered frame for scene discovery')
+          const hsv=toHsv(ctx.getImageData(0,0,canvas.width,canvas.height).data)
+          visuals.push({frame:window[i],score:prior?contentDelta(prior,hsv):0})
+          prior=hsv
+        }
+      }
+      await prepareAudio(p)
+      const mix=await renderMix(p,start/p.settings.fps,end/p.settings.fps,{sampleRate:8000})
+      if(Math.abs(mix.duration-length/p.settings.fps)>.002)throw new Error('Discovery mix duration differs from requested timeline range')
+      const speech=timelineTranscript(p,start/p.settings.fps,end/p.settings.fps)
+      const boundaries=Object.values(p.clips).filter(c=>c.kind==='video'||c.kind==='image')
+        .flatMap(c=>[c.start,c.start+c.duration])
+        .concat(p.markers.map(m=>m.frame)).filter(f=>f>start&&f<end)
+      const found=discoverTimelineEvents({start,end,fps:p.settings.fps,visuals,
+        audio:audioIndexBins(levelFrames(mix),start,p.settings.fps),speech,boundaries})
+      if(constructionFingerprint(getProject())!==fingerprint||getProject().construction!==s)
+        throw new Error('Timeline or construction changed during event indexing; retry')
+      if((s.discoveryEvents?.length??0)+found.length>10000)throw new Error('Discovery event budget reached; finish the current editorial pass')
+      const scanId=uid('discovery_scan')
+      const events=found.map(x=>({...x,id:uid('discovery_event'),scanId,
+        sourceClipIds:[...new Set(Object.values(p.clips).filter(c=>c.assetId&&c.start<x.end&&c.start+c.duration>x.start)
+          .map(c=>c.id))].slice(0,30)}))
+      const scan={id:scanId,start,end,fingerprint,visualFrames:frames,audioMeasured:true,transcriptLines:speech.length,eventCount:events.length}
+      const next=structuredClone(s);next.discoveryScans=[...(next.discoveryScans??[]),scan]
+      next.discoveryEvents=[...(next.discoveryEvents??[]),...events]
+      await persist(next)
+      return {scan_id:scanId,start_frame:start,end_frame:end,visual_samples:frames.length,
+        audio_metric_bins:Math.round(mix.duration/.2),transcript_lines:speech.length,
+        candidates:events,status:constructionStatus(getProject(),next),
+        limitation:'Sparse visual sampling, measured audio energy and transcript timing find candidates, NOT all events. Any interval between samples remains unobserved; do not treat a quiet/unchanged score as proof of unimportant footage.'}
+    },
+  },
+  {
+    name:'review_discovered_event',
+    description:'Resolve one event candidate after actually inspecting the surrounding current-timeline footage. Mark keep, discard or uncertain with a specific evidence-based reason; unknown or uncertain events cannot be removed by planned cuts. Discard requires a fresh inspection covering the candidate range. Only use this on pre-apply original timeline.',
+    inputSchema:obj({event_id:str('Discovery event ID'),
+      decision:oneOf('How this candidate affects the edit',['keep','discard','uncertain']),
+      reason:str('Specific evidence-based justification'),
+      inspection_ids:list('Real inspect_video_range receipts that cover this event',str('Receipt ID'),{maxItems:12})},
+      ['event_id','decision','reason','inspection_ids']),
+    run:async a=>{
+      const s=state(),p=getProject()
+      if(s.applied)throw new Error('Cannot resolve original discovery candidates after editing')
+      const eventId=z.string().trim().min(1).parse(a.event_id)
+      const decision=z.enum(['keep','discard','uncertain']).parse(a.decision)
+      const reason=z.string().trim().min(20).max(1500).parse(a.reason)
+      const ids=z.array(z.string().min(1)).max(12).parse(a.inspection_ids)
+      const event=s.discoveryEvents?.find(e=>e.id===eventId)
+      if(!event)throw new Error('Unknown discovery event ID; retrieve indexed event pages first')
+      const receipts=s.inspections.filter(i=>ids.includes(i.id)&&i.audio&&i.frames.length)
+      if(!receipts.some(i=>i.start<=event.start&&i.end>=event.end))
+        throw new Error('Inspect the complete candidate interval in inspect_video_range before assigning an editorial decision')
+      if(constructionFingerprint(p)!==s.fingerprint)throw new Error('Original indexed timeline changed')
+      const next=structuredClone(s),target=next.discoveryEvents!.find(e=>e.id===eventId)!
+      target.decision=decision;target.decisionReason=reason;target.inspectionIds=ids
+      await persist(next)
+      return {saved:true,event_id:eventId,decision,
+        note:'The decision is a model editorial judgement based on real inspection; a transcript or visual jump alone does not prove any game event or joke.'}
     },
   },
   {
