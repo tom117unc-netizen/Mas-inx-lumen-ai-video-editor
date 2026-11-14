@@ -241,6 +241,7 @@ async function runModel(req: AgentRunRequest) {
     const audioSamples = new Map<string,AudioSnippet[]>()
     const audioSupported=canReceiveTimelineAudio(provider,modelId)
     let constructionActive=false
+    let anyEditorToolExecuted=false
     const visionCache = new VisionEvidenceCache()
     let activeBatchSignal:AbortSignal=controller.signal
     let analyserPromise: Promise<AgentVisualAnalyser | undefined> | undefined
@@ -278,7 +279,7 @@ async function runModel(req: AgentRunRequest) {
       return analyserPromise
     }
     const tools = buildTools(await editorTools(), pictures,audioSamples,audioSupported, () => ({ native, vision }), getAnalyse,
-      name=>{if(isConstructionExecutionTool(name))constructionActive=true})
+      name=>{anyEditorToolExecuted=true;if(isConstructionExecutionTool(name))constructionActive=true})
 
     const stored = historyOf(req.conversationId)
     const history = native ? stripReasoning(stored) : stored
@@ -406,6 +407,17 @@ async function runModel(req: AgentRunRequest) {
           effort = undefined
           carried = carry([...carried, ...completed])
           emit({ type: 'status', message: 'This model doesn’t take that effort setting — carrying on with its default.' })
+          continue
+        }
+        // Before the first editor operation, retrying a failed initial provider
+        // request is safe: there is no tool side effect to repeat.
+        if(!constructionActive && !anyEditorToolExecuted && !wroteText &&
+           transientRetries<2 && isTransientConstructionError(err,deadline.signal.aborted)) {
+          transientRetries++
+          emit({type:'status',message:`Reconnecting to AI provider (attempt ${transientRetries}/2); no editing tools have run.`})
+          await waitForRetry(constructionRetryDelayMs(transientRetries,err),controller.signal)
+          carried=[]
+          completed=[]
           continue
         }
         if(constructionActive && transientRetries<CONSTRUCTION_MAX_TRANSIENT_RETRIES &&
