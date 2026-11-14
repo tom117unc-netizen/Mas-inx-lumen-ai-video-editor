@@ -46,6 +46,18 @@ describe('timeline event discovery: evidence, not semantic claims',()=>{
   expect(bins[0].db).toBe(-10)
   expect(bins[1].db).toBe(-80)
  })
+
+ it('does not silently truncate a busy visual, transcript and clip-boundary index',()=>{
+  const x={...base(),end:6000}
+  x.visuals=Array.from({length:180},(_,i)=>({frame:i*30,score:i%3===1?60:2}))
+  x.boundaries=Array.from({length:65},(_,i)=>i*48+24)
+  x.speech=Array.from({length:80},(_,i)=>({start:i*2+.1,end:i*2+.5,text:'Distinct event '+i,clipId:'recording'}))
+  const events=discoverTimelineEvents(x)
+  expect(events.filter(e=>e.signal==='visual-change')).toHaveLength(60)
+  expect(events.filter(e=>e.signal==='clip-boundary')).toHaveLength(65)
+  expect(events.filter(e=>e.signal==='speech')).toHaveLength(80)
+  expect(events.length).toBeGreaterThan(140)
+ })
  it('rejects malformed scan bounds',()=>{
   expect(()=>discoverTimelineEvents({...base(),end:0})).toThrow(/range/)
  })
