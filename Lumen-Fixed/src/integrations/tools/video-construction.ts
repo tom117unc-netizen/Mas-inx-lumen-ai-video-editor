@@ -82,7 +82,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       if(!useSession.getState().path) throw new Error('Save the project before beginning persistent construction')
       if(getProject().construction && a.restart!==true) throw new Error('Construction already exists: resume with get_video_construction or explicitly restart')
       const s=beginConstruction(getProject(),String(a.goal??''),true);await persist(s)
-      return {status:constructionStatus(getProject(),s),scope:s.scope,fps:s.fps,sections:{context:s.sections?.context.length,editing:s.sections?.editing.length,total_seconds:s.sections?.originalFrames/s.fps}}
+      return {status:constructionStatus(getProject(),s),scope:s.scope,fps:s.fps,sections:{context:s.sections?.context.length,editing:s.sections?.editing.length,total_seconds:s.sections?s.sections.originalFrames/s.fps:0}}
     },
   },
   {
