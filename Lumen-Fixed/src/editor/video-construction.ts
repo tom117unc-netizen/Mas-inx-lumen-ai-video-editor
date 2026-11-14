@@ -37,6 +37,7 @@ export interface DiscoveryEvent extends FrameRange {
 export interface ConstructionAudioSample {id:string;start:number;end:number;fingerprint:string;purpose:string}
 export interface ConstructionAudioObservation {id:string;sampleId:string;eventType:'speech_delivery'|'laughter'|'game_sound'|'music'|'silence'|'uncertain';summary:string;audibleCues:string;confidence:'low'|'medium'|'high';uncertainty:string}
 export interface ConstructionJoinAudioCheck {frame:number;fingerprint:string;report:JoinAudioReport|null}
+export interface ConstructionPreflightAudioCheck {id:string;fingerprint:string;leftSelectionId:string;rightSelectionId:string;leftEnd:number;rightStart:number;joinIndex:number;report:JoinAudioReport}
 export interface ConstructionJoinVerdict {frame:number;verdict:'accept'|'repair';reason:string}
 export interface ConstructionSectionPlan {
   originalFrames:number;contextTargetFrames:number;editTargetFrames:number;
@@ -65,6 +66,8 @@ export interface ConstructionState {
   audioSamples?:ConstructionAudioSample[];
   audioObservations?:ConstructionAudioObservation[];
   joinAudioChecks?:ConstructionJoinAudioCheck[];
+  /** Actual source-mix join handles inspected before publishing, not evidence that the receiving model listened. */
+  spliceAudioChecks?:ConstructionPreflightAudioCheck[];
   repairOf?:{fingerprint:string;targetFrames:number[];issues:string[];depth:number};
   applied?:{fingerprint:string;joins:number[]};
   review?:{fingerprint:string;joins:number[];story:string;pacing:string;issues:string[];joinVerdicts?:ConstructionJoinVerdict[]};
