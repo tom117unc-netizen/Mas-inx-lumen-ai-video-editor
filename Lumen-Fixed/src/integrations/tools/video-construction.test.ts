@@ -126,6 +126,10 @@ it('returns a bounded, real timeline WAV and persists an audio evidence receipt'
  await run('begin_video_construction',{goal:'Check whether the sound is a laugh or an impact'})
  const clip=await run('inspect_construction_audio',{start_frame:30,end_frame:150,purpose:'Check how the joke is delivered'}) as any
  expect(clip.audio).toMatchObject({mimeType:'audio/wav'})
+ const {runAgentTool}=await import('../agent-tools')
+ const bridged=await runAgentTool('inspect_construction_audio',{start_frame:30,end_frame:150,purpose:'Check the audio bridge'})
+ expect(bridged.content.map(c=>c.type)).toEqual(['text','audio'])
+ expect(bridged.content[1]).toMatchObject({type:'audio',mimeType:'audio/wav'})
  expect(clip.audio.data).toMatch(/^[A-Za-z0-9+/=]+$/)
  expect(clip.json).toMatchObject({start_frame:30,end_frame:150,purpose:'Check how the joke is delivered'})
  expect(getProject().construction?.audioSamples?.[0]).toMatchObject({id:clip.json.audio_sample_id,start:30,end:150})
