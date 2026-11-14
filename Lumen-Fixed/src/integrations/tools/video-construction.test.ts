@@ -24,12 +24,31 @@ beforeEach(()=>{
  audioMock.click=false
  const p=createEmptyProject('Video');const c=createClip({kind:'video',trackId:p.tracks[0].id,start:0,duration:300});p.clips[c.id]=c;useEditor.getState().loadProject(p)
 })
+/** The mock video switches visually near 3s. This helper exercises the NEW
+ * required scan, then closely examines candidate intervals crossing a cut. */
+async function discoverBeforeCut(start:number,end:number){
+ const scan=await run('scan_construction_events',{start_frame:0,end_frame:300}) as any
+ for(const candidate of scan.candidates as any[]){
+  if(candidate.start>=end||candidate.end<=start)continue
+  const receipts:string[]=[]
+  for(let at=candidate.start;at<candidate.end;at+=90){
+    const until=Math.min(candidate.end,at+90)
+    const view=await run('inspect_video_range',{start_frame:at,end_frame:until,mode:'focused',
+      priority_frames:candidate.visualFrames.filter((f:number)=>f>=at&&f<until)}) as any
+    receipts.push(view.json.inspection_id)
+  }
+  await run('review_discovered_event',{event_id:candidate.id,decision:'discard',
+    reason:'Inspected each targeted mock scene interval; safe to tighten this redundant fixture section.',
+    inspection_ids:receipts})
+ }
+ return scan
+}
 it('registers a resumable workflow and marks project dirty without changing clips',async()=>{
  const before=structuredClone(getProject().clips),v=useEditor.getState().version
  await run('begin_video_construction',{goal:'Funny story'})
  expect(getProject().clips).toEqual(before);expect(useEditor.getState().version).toBeGreaterThan(v)
  const reloaded=JSON.parse(JSON.stringify(getProject()));useEditor.getState().loadProject(reloaded)
- expect(await run('get_video_construction')).toMatchObject({status:{stage:'investigate'}})
+ expect(await run('get_video_construction')).toMatchObject({status:{stage:'discover'}})
 })
 it('inspects exact neighbouring frames separately with synchronized transcript/audio metadata',async()=>{
  await run('begin_video_construction',{goal:'Story'})
@@ -41,6 +60,7 @@ it('inspects exact neighbouring frames separately with synchronized transcript/a
 })
 it('blocks unsampled cuts and applies verified cuts in one undo step',async()=>{
  await run('begin_video_construction',{goal:'Story'})
+ await discoverBeforeCut(100,200)
  const scan=await run('inspect_video_range',{start_frame:0,end_frame:300,mode:'overview'}) as any
  const first=await run('inspect_video_range',{start_frame:99,end_frame:102,mode:'boundary'}) as any
  const last=await run('inspect_video_range',{start_frame:199,end_frame:202,mode:'boundary'}) as any
@@ -67,6 +87,7 @@ it('rejects oversized boundary requests before decoding',async()=>{
 })
 it('requires actual output inspection before recording a successful review',async()=>{
  await run('begin_video_construction',{goal:'Story'})
+ await discoverBeforeCut(100,200)
  // Use the live flow to generate receipts, not model-supplied evidence.
  const ids=[]
  for(const [start,end,mode] of [[0,300,'overview'],[99,102,'boundary'],[199,202,'boundary']] as const) {
@@ -186,11 +207,16 @@ it('refuses to dismiss unexamined discovered events',async()=>{
    reason:'The inspected action is ordinary repeated waiting, not a protected setup.',
    inspection_ids:[]})).rejects.toThrow(/inspect/i)
  const view=await run('inspect_video_range',{start_frame:event.start,end_frame:event.end,mode:'overview'}) as any
+ await expect(run('review_discovered_event',{event_id:event.id,decision:'discard',
+   reason:'Overview alone does not justify dropping this event, even when an inspection ID exists.',
+   inspection_ids:[view.json.inspection_id]})).rejects.toThrow(/focused/i)
+ const focused=await run('inspect_video_range',{start_frame:event.start,end_frame:event.end,mode:'focused',
+   priority_frames:event.visualFrames.filter((f:number)=>f>=event.start&&f<event.end)}) as any
  expect(await run('review_discovered_event',{event_id:event.id,decision:'discard',
    reason:'This particular visual switch is a menu that carries no setup or relevant action.',
-   inspection_ids:[view.json.inspection_id]})).toMatchObject({saved:true,decision:'discard'})
+   inspection_ids:[focused.json.inspection_id]})).toMatchObject({saved:true,decision:'discard'})
  const s=getProject().construction!
- expect(s.discoveryEvents?.find(x=>x.id===event.id)?.inspectionIds).toEqual([view.json.inspection_id])
+ expect(s.discoveryEvents?.find(x=>x.id===event.id)?.inspectionIds).toEqual([focused.json.inspection_id])
  await expect(run('review_discovered_event',{event_id:'fake',decision:'discard',
    reason:'The event was not observed, so no decision is possible.',
    inspection_ids:[view.json.inspection_id]})).rejects.toThrow(/unknown/i)
@@ -212,7 +238,7 @@ it('prioritizes discovery risks and applies batch decisions atomically',async()=
  expect(queue.total).toBeGreaterThanOrEqual(2)
  expect(queue.items[0].signal).toBe('visual-change')
  const a=await run('inspect_video_range',{start_frame:visual.start,end_frame:visual.end,mode:'overview'}) as any
- const b=await run('inspect_video_range',{start_frame:speech.start,end_frame:speech.end,mode:'overview'}) as any
+ const b=await run('inspect_video_range',{start_frame:speech.start,end_frame:speech.end,mode:'focused'}) as any
  const decisions=[
  {event_id:visual.id,decision:'keep',reason:'Observed the game scene changes in the rendered visual sequence.',inspection_ids:[a.json.inspection_id]},
  {event_id:speech.id,decision:'discard',reason:'Inspected the particular line; it is redundant for this intended edit.',inspection_ids:[b.json.inspection_id]},
@@ -222,4 +248,23 @@ it('prioritizes discovery risks and applies batch decisions atomically',async()=
  expect(await run('review_discovered_events',{decisions})).toMatchObject({saved:true,reviewed:[visual.id,speech.id]})
  const pending=await run('get_discovery_queue') as any
  expect(pending.items.some((e:any)=>e.id===visual.id||e.id===speech.id)).toBe(false)
+})
+
+it('refuses sparse overview as discard evidence and accepts exact-priority focused frames',async()=>{
+ await run('begin_video_construction',{goal:'Inspect difficult visual details'})
+ const scan=await run('scan_construction_events',{start_frame:0,end_frame:300}) as any
+ const candidate=scan.candidates.find((e:any)=>e.signal==='visual-change')
+ expect(candidate).toBeTruthy()
+ const overview=await run('inspect_video_range',{start_frame:candidate.start,end_frame:candidate.end,mode:'overview'}) as any
+ await expect(run('review_discovered_event',{event_id:candidate.id,decision:'discard',
+   reason:'The screenshot overview does not prove the visual action was irrelevant.',
+   inspection_ids:[overview.json.inspection_id]})).rejects.toThrow(/focused/i)
+ const detail=await run('inspect_video_range',{start_frame:candidate.start,end_frame:candidate.end,mode:'focused',
+   priority_frames:candidate.visualFrames.filter((f:number)=>f>=candidate.start&&f<candidate.end)}) as any
+ expect(detail.json.frames).toEqual([...detail.json.frames].sort((a:number,b:number)=>a-b))
+ expect(detail.json.frames.length).toBeGreaterThan(12)
+ expect(detail.json.frames).toContain(candidate.visualFrames[0])
+ expect(await run('review_discovered_event',{event_id:candidate.id,decision:'discard',
+   reason:'Dense visual evidence directly shows a fixture transition with no necessary story content.',
+   inspection_ids:[detail.json.inspection_id]})).toMatchObject({saved:true,decision:'discard'})
 })
