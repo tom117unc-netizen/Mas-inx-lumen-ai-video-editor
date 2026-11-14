@@ -6,6 +6,7 @@ import type { Project } from './types'
 import type { JoinAudioReport } from './construction-join-audio'
 import type { EventSignal } from './construction-event-index'
 import { planConstructionSections, type BankedSection, type PlannedSection } from './construction-sections'
+import type { ImmutableSourceManifest, SourceSelection, SourceClipMap, SelectionOutputMap } from './construction-assembler'
 import { projectFingerprint } from './anime-review-approval'
 
 const frame = z.number().int().nonnegative()
@@ -41,6 +42,13 @@ export interface ConstructionSectionPlan {
   reads?:{editSectionId:string;bankSectionIds:string[];revision:number;question?:string}[];
 }
 export interface ConstructionState {
+  /** Deep source snapshot is never modified by an output edit or repair. */
+  sourceManifest?:ImmutableSourceManifest
+  /** Keep-first editable source selections, ordered as intended in the output. */
+  sourceSelections?:SourceSelection[]
+  /** Reversible source to output map for precise reconstruction and review. */
+  assembly?:{sequenceId:string;sourceSequenceId:string;sourceFingerprint:string;
+    selections:SelectionOutputMap[];clips:SourceClipMap[];outputFrames:number}
   sections?:ConstructionSectionPlan;
   version:1; paused?:boolean; discoveryRequired?:boolean; revision?:number; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
   coverage:z.infer<typeof coverageSchema>[];beats:StoryBeat[];cuts:ConstructionCut[];inspections:InspectionReceipt[];
@@ -100,13 +108,19 @@ export function beginConstruction(p:Project,goal:string,sectioned=false):Constru
         {start:c.start,end:c.start+1,kind:'clip-boundary',strength:1},
         {start:c.start+c.duration,end:c.start+c.duration+1,kind:'clip-boundary',strength:1},
       ])]):null
+  const fingerprint=constructionFingerprint(p)
+  const sourceManifest=sectioned?{
+    fingerprint,sequenceId:p.sequence?.id??'seq_main',
+    settings:structuredClone(p.settings),tracks:structuredClone(p.tracks),
+    clips:structuredClone(p.clips),markers:structuredClone(p.markers),
+  }:undefined
   const sections=scheduled?{
     originalFrames:scheduled.totalFrames,
     contextTargetFrames:scheduled.contextTargetFrames,
     editTargetFrames:scheduled.editTargetFrames,
     context:scheduled.context,editing:scheduled.editing,reads:[],
   }:undefined
-  return {version:1,discoveryRequired:true,revision:0,sections,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
+  return {version:1,discoveryRequired:true,revision:0,sections,sourceManifest,sourceSelections:[],projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint,goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
 }
 function assertFresh(p:Project,s:ConstructionState) {
   if(s.projectId!==p.id || s.sequenceId!==(p.sequence?.id??'main') || (s.applied?.fingerprint??s.fingerprint)!==constructionFingerprint(p)) throw new Error('Timeline changed: construction is stale. Re-map the current timeline before editing.')
@@ -294,6 +308,9 @@ export function constructionStatus(p:Project,s:ConstructionState) {
     next:'Bank the full authorised recording in evidence-backed sections before planning local edits'
   }
   const uncovered=uncoveredRanges(s)
+  if(!uncovered.length && s.sections?.editing.every(x=>x.planned) && s.beats.length)
+    return {stage:'assemble',complete:false,uncovered:[],
+      next:'Choose original source moments in intentional output order, validate the source-backed EDL, then publish a new non-destructive edit sequence'}
   return {stage:uncovered.length?'investigate':s.beats.length?'refine':'map',complete:false,uncovered,next:uncovered.length?'Inspect uncovered timeline ranges with audio and pictures':s.beats.length?'Refine scene cuts, call inspect_cut_context for each cut, inspect neighbouring frames and validate dialogue boundaries':'Map chapters, scenes, setups, payoffs and their dependencies'}
 }
 export function nextEventProbe(left:number,right:number,leftPresent:boolean,rightPresent:boolean,singleChange:boolean) {
