@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { beginConstruction, constructionFingerprint, constructionStatus, constructionStorySignature, mergeRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript } from '@/editor/smart'
-import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext } from '@/editor/construction-context'
+import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
 import { assessVideoQuality, defaultVideoBrief } from '@/editor/video-quality'
 import { timelineStills, canvasBase64 } from '@/engine/stills'
 import { saveProject, useSession } from '@/project/session'
@@ -114,7 +114,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
   {
     name:'inspect_cut_context',
     description:'Before accepting an exact removal, retrieve its containing scene, earlier setups, later dependent callbacks, nearby story beats, and the actual timeline transcript on both sides. Saves a context-read receipt tied to the current story map and cut coordinates; never proves that unseen/silent events are unimportant. If speech intersects a boundary, refine the cut and inspect again.',
-    inputSchema:obj({cut_id:str('ID of an already proposed cut'),context_seconds:int('Seconds of transcript before/after the cut, default 12, max 60',{minimum:1,maximum:60})},['cut_id']),
+    inputSchema:obj({cut_id:str('ID of an already proposed cut'),context_seconds:int('Seconds of transcript before/after the cut, default 12, max 60',{minimum:1,maximum:60}),context_query:str('Optional distinctive words describing an event, joke, object or callback to look for elsewhere in footage')},['cut_id']),
     run:async a=>{
       const s=state(),p=getProject(),fingerprint=constructionFingerprint(p)
       if(s.applied) throw new Error('The plan is already applied; review edited joins instead')
@@ -122,15 +122,17 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const contextSeconds=z.number().int().min(1).max(60).parse(a.context_seconds??12)
       const story=relatedStoryContext(s,cutId)
       const speech=speechCutContext(p,story.cut,contextSeconds)
+      const query=z.string().trim().max(240).parse(a.context_query??'')
+      const lexicalCandidates=transcriptCallbackCandidates(p,story.cut,query || [story.focus.summary,story.cut.reason].join(' '))
       const storySignature=constructionStorySignature(s)
       if(constructionFingerprint(getProject())!==fingerprint || getProject().construction!==s) throw new Error('Project or story map changed during context retrieval; retry')
-      if(speech.violations.length) return {story,speech,recorded:false,safe_to_apply:false,next:'Speech crosses a proposed boundary. Refine the frames, inspect actual audio and retrieve context again.'}
+      if(speech.violations.length) return {story,speech,lexicalCandidates,recorded:false,safe_to_apply:false,next:'Speech crosses a proposed boundary. Refine the frames, inspect actual audio and retrieve context again.'}
       const next=structuredClone(s)
       next.contextInspections=[...(next.contextInspections??[]).filter(r=>r.cutId!==cutId),{cutId,storySignature}]
       await persist(next)
-      return {story,speech,recorded:true,safe_to_apply:'No transcribed phrase crosses an edge; untranscribed speech or sounds are still unverified',
+      return {story,speech,lexicalCandidates,recorded:true,safe_to_apply:'No transcribed phrase crosses an edge; untranscribed speech or sounds are still unverified',
         recommended_inspection_ranges:[story.focus,...story.dependencies,...story.related].map(b=>({beat_id:b.id,start_frame:b.start,end_frame:b.end})).slice(0,80),
-        note:'This receipt certifies context was retrieved, not that a model understood every setup, joke or reaction. Inspect relevant audio and video, refine protected moments and make a deliberate editorial judgement.'}
+        note:'Explicit story links and lexical transcript matches are retrieval clues only, not evidence that a callback is present. This receipt certifies context was retrieved, not that a model understood every setup, joke or reaction. Inspect relevant audio and video, refine protected moments and make a deliberate editorial judgement.'}
     },
   },
   {
