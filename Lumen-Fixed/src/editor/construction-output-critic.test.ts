@@ -49,6 +49,15 @@ describe('skeptical independent structural critic of published video',()=>{
     expect(report.ok).toBe(false)
     expect(report.issues).toEqual(expect.arrayContaining([expect.stringMatching(/round-end.*focused re-inspection.*end/i)]))
   })
+  it('cannot certify a long essential event by looking at a few frames of its output',()=>{
+    const s=fixture()
+    const check=s.inspections.find(x=>x.id==='focused-118')!
+    check.end=118
+    check.frames=[115,116,117]
+    expect(auditOutputNarrative(s).issues).toEqual(expect.arrayContaining([
+      expect.stringMatching(/round-end.*focused re-inspection.*end/i),
+    ]))
+  })
   it('fails if a round has no preserved result even though its start and premise are present',()=>{
     const s=fixture()
     s.assembly!.moments=s.assembly!.moments.filter(m=>m.momentId!=='end')
