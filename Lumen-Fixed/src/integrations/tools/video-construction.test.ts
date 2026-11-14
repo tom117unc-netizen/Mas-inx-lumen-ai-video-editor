@@ -420,3 +420,39 @@ it('publishes an independently editable output sequence without changing the ori
  expect(getProject().clips).toEqual(originalClips)
  expect(getProject().construction?.applied).toBeUndefined()
 })
+
+it('repairs a failed output by reopening the unchanged original and preserving both versions',async()=>{
+ await run('begin_video_construction',{goal:'Construct source-backed gaming video with an ending'})
+ await run('scan_construction_events',{start_frame:0,end_frame:300})
+ const overview=await run('inspect_video_range',{start_frame:0,end_frame:300,mode:'overview'}) as any
+ const edge=await run('inspect_video_range',{start_frame:0,end_frame:3,mode:'boundary'}) as any
+ await run('update_video_construction',{beats:[{id:'scene',start:0,end:300,kind:'scene',summary:'Whole timeline for a repairable first pass'}]})
+ await completeTwoPassSections(overview.json.inspection_id)
+ await run('record_keep_first_selections',{selections:[{id:'whole',start_frame:0,end_frame:300,output_order:0,
+   role:'complete',beat_id:'scene',reason:'Preserve complete first version for a source-backed repair trial.',
+   inspection_ids:[overview.json.inspection_id,edge.json.inspection_id]}]})
+ const originalId=getProject().sequence?.id??'seq_main'
+ const originalClips=structuredClone(getProject().clips)
+ const first=await run('publish_keep_first_assembly',{name:'First version'}) as any
+ expect(first.status.stage).toBe('review')
+ const firstId=first.sequence_id
+ await expect(run('reopen_construction_source_for_repair')).rejects.toThrow(/review/i)
+ await run('inspect_video_range',{start_frame:0,end_frame:300,mode:'overview'})
+ const failed=await run('review_video_construction',{story:'This has no creative hook or pacing',
+   pacing:'It is the complete recording without meaningful tightening',
+   issues:['The opening hook and ending need a more compelling sequence']}) as any
+ expect(failed.status.complete).toBe(false)
+ const redo=await run('reopen_construction_source_for_repair') as any
+ expect(redo).toMatchObject({reopened:true,original_sequence_id:originalId,
+   previous_output_sequence_id:firstId,repair_depth:1,status:{stage:'assemble'}})
+ expect(getProject().clips).toEqual(originalClips)
+ expect(getProject().sequences?.[firstId]).toBeTruthy()
+ expect(getProject().construction?.sourceSelections?.map(x=>x.id)).toEqual(['whole'])
+ expect(getProject().construction?.inspections.length).toBeGreaterThan(0)
+ expect(getProject().construction?.repairOf?.issues).toContain('The opening hook and ending need a more compelling sequence')
+ const second=await run('publish_keep_first_assembly',{name:'Corrected version'}) as any
+ expect(second.sequence_id).not.toBe(firstId)
+ expect(second.original_sequence_id).toBe(originalId)
+ expect(getProject().sequences?.[firstId]).toBeTruthy()
+ expect(getProject().sequences?.[originalId].clips).toEqual(originalClips)
+})
