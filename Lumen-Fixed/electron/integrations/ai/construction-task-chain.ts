@@ -14,7 +14,7 @@ interface Snapshot {
   goal?:unknown;revision?:unknown;fps?:unknown
   status?:{stage?:unknown;complete?:unknown;uncovered?:unknown;uncovered_count?:unknown;next?:unknown}
   missing_timeline_transcripts?:unknown
-  next_context_section?:unknown;next_edit_section?:unknown
+  next_context_section?:unknown;next_context_probe?:unknown;next_context_inspection_ids?:unknown;next_edit_section?:unknown
   sectionPlan?:{context_target_frames?:unknown;edit_target_frames?:unknown;pending_context?:unknown;pending_editing?:unknown}
   discoveryPending?:unknown
   beats?:{total?:unknown};cuts?:{total?:unknown}
@@ -54,6 +54,8 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   const editLabel=typeof nextEdit?.id==='string'?nextEdit.id:'the next unplanned edit section'
   const bankLabel=typeof nextBank?.id==='string'?nextBank.id:'the next unbanked context section'
   const bankRange=nextBank?safeRange(nextBank as {start:number;end:number}):null
+  const bankProbe=s.next_context_probe?safeRange(s.next_context_probe as {start:number;end:number}):null
+  const bankEvidence=Array.isArray(s.next_context_inspection_ids)?s.next_context_inspection_ids.filter(x=>typeof x==='string').slice(0,64):[]
   const editRange=nextEdit?safeRange(nextEdit as {start:number;end:number}):null
   const reviewIssues=(s.review&&typeof s.review==='object'&&Array.isArray((s.review as {issues?:unknown}).issues))
     ?(s.review as {issues:string[]}).issues.filter(x=>typeof x==='string').slice(0,3):[]
@@ -65,7 +67,7 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
     task=bounded?`Scan ONE not-yet-indexed current-timeline range [${bounded.start}, ${bounded.end}) with scan_construction_events. This scan finds search candidates only. Do not label them jokes or safe-to-cut based solely on audio levels.`
       :'Retrieve discovery scan gaps using get_video_construction; do not guess timeline ranges.'
   } else if(stage==='context-bank'){
-    task=bankRange?`GLOBAL CONTEXT BANKING PASS, before editing: work on section ${bankLabel} [${bankRange.start}, ${bankRange.end}). Retrieve the actual saved evidence for that interval, inspect its next <=60-second gap with inspect_video_range, consult get_source_transcript / get_source_observations for relevant authorised assets, and when ALL of the section has receipt coverage call record_construction_context_section with key moments, rule/night/round state, distant callback leads and uncertainties. Do not start choosing deletions until the whole context bank is ready.`
+    task=bankRange?`GLOBAL CONTEXT BANKING PASS, before editing: work on section ${bankLabel} [${bankRange.start}, ${bankRange.end}). ${bankProbe?`Inspect only the NEXT uncovered [${bankProbe.start}, ${bankProbe.end}) with inspect_video_range (overview first; focus on important signals).`:`Inspections cover the entire section; call record_construction_context_section with the relevant existing receipts: ${bankEvidence.join(', ')||'fetch saved receipts'}.`} Consult get_source_transcript / get_source_observations for authorised assets. Bank real key moments, rule/night/round progression, distant callback leads and uncertainties. Do not start choosing deletions until the WHOLE recording is banked.`
       :'Use get_video_construction to retrieve the next unbanked context section and finish indexing the WHOLE original timeline before editing.'
   } else if(stage==='investigate'){
     task=bounded?`Inspect ONE uncovered timeline span [${bounded.start}, ${bounded.end}) using inspect_video_range, record grounded audiovisual findings with update_video_construction, and stop after saving. Before interpreting a local event, retrieve its section's full bank context and any linked earlier/later setup; use focused inspection for suspicious visual events.`
