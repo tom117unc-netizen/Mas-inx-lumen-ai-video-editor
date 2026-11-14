@@ -23,7 +23,7 @@ export type StoryBeat = z.infer<typeof beatSchema>
 export type ConstructionCut = z.infer<typeof cutSchema>
 export interface InspectionReceipt extends FrameRange {id:string;frames:number[];audio:boolean;transcript:boolean}
 export interface ContextInspectionReceipt {cutId:string;storySignature:string}
-export interface ConstructionJoinAudioCheck {frame:number;fingerprint:string;report:JoinAudioReport}
+export interface ConstructionJoinAudioCheck {frame:number;fingerprint:string;report:JoinAudioReport|null}
 export interface ConstructionJoinVerdict {frame:number;verdict:'accept'|'repair';reason:string}
 export interface ConstructionState {
   version:1; paused?:boolean; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
