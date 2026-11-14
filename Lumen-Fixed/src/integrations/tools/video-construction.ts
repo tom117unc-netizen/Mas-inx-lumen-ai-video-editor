@@ -143,6 +143,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       // context reads and editing decisions that were based on it.
       if(section.summary!==summary || !section.indexed){
         next.sections!.reads=[]
+        next.contextInspections=[] // New global story knowledge invalidates earlier cut-context readings.
         for(const e of next.sections!.editing){e.planned=false;e.summary=undefined;e.evidenceIds=undefined}
       }
       await persist(next)
@@ -170,7 +171,8 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const linked=z.array(z.string()).max(16).parse(a.linked_context_ids??[])
       if(linked.some(x=>!s.sections!.context.some(c=>c.id===x)))throw new Error('Unknown linked global context section')
       const ids=[...new Set([...(edit.contextIds??[]),...linked])]
-      const ranked=selectBankContext(s.sections.context,edit,question,ids,z.number().int().min(1).max(24).parse(a.max_context_items??8))
+      const budget=Math.max(z.number().int().min(1).max(24).parse(a.max_context_items??8),ids.length)
+      const ranked=selectBankContext(s.sections.context,edit,question,ids,budget)
       const idsFound=ranked.map(x=>x.section.id)
       const previous=s.sections.reads?.find(r=>r.editSectionId===id)
       const alreadySaved=previous?.question===question &&
