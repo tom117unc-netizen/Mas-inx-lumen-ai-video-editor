@@ -383,7 +383,38 @@ async function runModel(req: AgentRunRequest) {
         writeHistory(req.conversationId, next)
         transientRetries=0
         if (constructionActive) {
-          const report = await callEditorTool('get_video_construction', { limit: 5 })
+          let report = await callEditorTool('get_video_construction', { limit: 5 })
+          let indexJob = (report.structuredContent as {indexing?:{state?:string;percent?:number;error?:string}}|undefined)?.indexing
+          if(!report.isError && (indexJob?.state==='running'||indexJob?.state==='pausing')) {
+            // The renderer's index worker is crunching original media locally.
+            // DO NOT spend provider steps polling it, and DO NOT keep a model
+            // request alive while hours of footage are being analysed. The AI
+            // conversation remains open; the source job checkpoints each
+            // completed section to disk and can resume after interruptions.
+            clearTimeout(timer)
+            emit({type:'status',message:'Indexing original footage locally; no AI model calls are required during this phase.'})
+            let reportedPercent=-1
+            try {
+              while(indexJob?.state==='running'||indexJob?.state==='pausing') {
+                await waitForRetry(2500,controller.signal)
+                report=await callEditorTool('get_video_construction',{limit:5})
+                if(report.isError)break
+                indexJob=(report.structuredContent as {indexing?:{state?:string;percent?:number;error?:string}}|undefined)?.indexing
+                const rounded=Math.floor((indexJob?.percent??0)/10)*10
+                if(rounded>reportedPercent){
+                  reportedPercent=rounded
+                  emit({type:'status',message:`Original footage indexing: ${Math.round(indexJob?.percent??0)}% saved.`})
+                }
+              }
+            } finally {
+              if(controller.signal.aborted) {
+                // User cancellation also stops the local indexing worker at
+                // the next safe boundary; it never starts an extra scan.
+                try {await callEditorTool('pause_construction_indexing',{})} catch{}
+              }
+            }
+            if(indexJob?.state==='completed')emit({type:'status',message:'Original footage index completed. Resuming source-grounded story analysis.'})
+          }
           const decision = constructionContinuation(report.isError ? null : report.structuredContent, constructionBatches, constructionProgress)
           if (decision.continue && !controller.signal.aborted) {
             constructionBatches++
