@@ -22,7 +22,7 @@ const cutSchema = z.object({id,start:frame,end:frame,reason:text,beatId:id,evide
 export type FrameRange = z.infer<typeof range>
 export type StoryBeat = z.infer<typeof beatSchema>
 export type ConstructionCut = z.infer<typeof cutSchema>
-export interface InspectionReceipt extends FrameRange {id:string;frames:number[];audio:boolean;transcript:boolean}
+export interface InspectionReceipt extends FrameRange {id:string;frames:number[];audio:boolean;transcript:boolean;mode?:'overview'|'boundary'|'focused'}
 export interface ContextInspectionReceipt {cutId:string;storySignature:string}
 export interface DiscoveryScan extends FrameRange {id:string;fingerprint:string;visualFrames:number[];audioMeasured:boolean;transcriptLines:number;eventCount:number}
 export interface DiscoveryEvent extends FrameRange {
@@ -35,7 +35,7 @@ export interface ConstructionAudioObservation {id:string;sampleId:string;eventTy
 export interface ConstructionJoinAudioCheck {frame:number;fingerprint:string;report:JoinAudioReport|null}
 export interface ConstructionJoinVerdict {frame:number;verdict:'accept'|'repair';reason:string}
 export interface ConstructionState {
-  version:1; paused?:boolean; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
+  version:1; paused?:boolean; discoveryRequired?:boolean; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
   coverage:z.infer<typeof coverageSchema>[];beats:StoryBeat[];cuts:ConstructionCut[];inspections:InspectionReceipt[];
   contextInspections?:ContextInspectionReceipt[];
   discoveryScans?:DiscoveryScan[];
@@ -87,7 +87,7 @@ export function beginConstruction(p:Project,goal:string):ConstructionState {
   const scope=mergeRanges(Object.values(p.clips).map(c=>({start:c.start,end:c.start+c.duration})))
   if(!scope.length) throw new Error('Put the permitted footage on the timeline first.')
   scope.forEach(r=>range.parse(r))
-  return {version:1,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
+  return {version:1,discoveryRequired:true,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
 }
 function assertFresh(p:Project,s:ConstructionState) {
   if(s.projectId!==p.id || s.sequenceId!==(p.sequence?.id??'main') || (s.applied?.fingerprint??s.fingerprint)!==constructionFingerprint(p)) throw new Error('Timeline changed: construction is stale. Re-map the current timeline before editing.')
@@ -100,6 +100,36 @@ export function unscannedDiscoveryRanges(s:ConstructionState):FrameRange[] {
       ...(h.end>scan.end?[{start:scan.end,end:h.end}]:[]),
     ])
   return holes
+}
+/** An overview receipt proves sampling happened, NOT that the entire interval was
+ * closely inspected. Deletion decisions demand focused direct visual evidence. */
+export function assertDiscoveryDecisionEvidence(
+  s:ConstructionState,
+  event:DiscoveryEvent,
+  decision:'keep'|'discard'|'uncertain',
+  inspectionIds:string[],
+) {
+  const ids=new Set(inspectionIds)
+  const relevant=s.inspections.filter(i=>ids.has(i.id) && i.audio && i.frames.length)
+  if(!relevant.some(i=>i.start<=event.start&&i.end>=event.end) &&
+     !mergeRanges(relevant).some(r=>r.start<=event.start&&r.end>=event.end))
+    throw new Error(`Inspect the entire candidate interval ${event.id} before assigning an editorial decision`)
+  if(decision!=='discard')return
+  const focused=relevant.filter(i=>i.mode==='focused'||i.mode==='boundary')
+  if(!mergeRanges(focused).some(r=>r.start<=event.start&&r.end>=event.end))
+    throw new Error(`Discarding event ${event.id} requires focused visual inspection across its full range; sparse overview is not enough`)
+  const fps=s.fps
+  for(const i of focused) {
+    const frames=[...i.frames].sort((a,b)=>a-b)
+    if(frames[0]!==i.start || frames.at(-1)!==i.end-1)
+      throw new Error(`Focused inspection ${i.id} misses its interval edges`)
+    if(frames.some((f,index)=>index>0&&f-frames[index-1]>Math.max(2,Math.ceil(fps*.25))))
+      throw new Error(`Focused inspection ${i.id} is too sparse to support deletion`)
+  }
+  const observed=new Set(focused.flatMap(i=>i.frames))
+  for(const frame of event.visualFrames)
+    if(frame>=event.start&&frame<event.end&&!observed.has(frame))
+      throw new Error(`Inspect exact visual trigger frame ${frame} for event ${event.id} before discarding it`)
 }
 export function uncoveredRanges(s:ConstructionState) {
   let holes=s.scope.map(r=>({...r}))
@@ -173,14 +203,18 @@ export function validateConstructionCuts(p:Project,s:ConstructionState):Construc
   if(s.paused) throw new Error('Construction is paused; resume explicitly before applying')
   validateRecords(s)
   if(uncoveredRanges(s).length) throw new Error('Investigate missing audiovisual coverage before cutting')
-  if(s.discoveryScans?.length && unscannedDiscoveryRanges(s).length)
+  if((s.discoveryRequired || s.discoveryScans?.length) && unscannedDiscoveryRanges(s).length)
     throw new Error('Complete the original timeline discovery scan before cutting; candidate search is only partially indexed')
   if(!s.beats.length || !s.cuts.length) throw new Error('Map story beats and propose cuts before applying')
   if(p.tracks.some(t=>t.locked && Object.values(p.clips).some(c=>c.trackId===t.id))) throw new Error('Locked tracks could lose sync during ripple cuts; resolve them first')
   if(s.cuts.reduce((n,c)=>n+c.end-c.start,0)>=s.scope.reduce((n,r)=>n+r.end-r.start,0)) throw new Error('Cannot remove the entire video')
   for(const c of s.cuts) {
     for(const event of s.discoveryEvents??[]) {
-      if(event.decision==='discard'||!overlap(event,c))continue
+      if(!overlap(event,c))continue
+      if(event.decision==='discard') {
+        if(s.discoveryRequired)assertDiscoveryDecisionEvidence(s,event,'discard',event.inspectionIds??[])
+        continue
+      }
       if(event.decision==='keep')throw new Error(`Cut damages an explicitly protected discovery event ${event.id}: ${event.description}`)
       throw new Error(`Cut intersects unresolved discovery event ${event.id} (${event.signal}); inspect the actual audiovisual moment before deciding`)
     }
@@ -210,7 +244,7 @@ export function constructionStatus(p:Project,s:ConstructionState) {
     const complete=!!review && review.fingerprint===s.applied.fingerprint && !review.issues.length && s.applied.joins.every(j=>review.joins.includes(j))
     return {stage:complete?'complete':'review',complete,uncovered:[],next:complete?'Finished editorial checks':'Inspect edited join frames and rendered join audio, then review story and pacing across the whole output'}
   }
-  const unscanned=s.discoveryScans?.length?unscannedDiscoveryRanges(s):[]
+  const unscanned=(s.discoveryRequired||s.discoveryScans?.length)?unscannedDiscoveryRanges(s):[]
   if(unscanned.length)return {stage:'discover',complete:false,uncovered:unscanned,next:'Finish indexing the original timeline event candidates before proposing removals'}
   const uncovered=uncoveredRanges(s)
   return {stage:uncovered.length?'investigate':s.beats.length?'refine':'map',complete:false,uncovered,next:uncovered.length?'Inspect uncovered timeline ranges with audio and pictures':s.beats.length?'Refine scene cuts, call inspect_cut_context for each cut, inspect neighbouring frames and validate dialogue boundaries':'Map chapters, scenes, setups, payoffs and their dependencies'}
