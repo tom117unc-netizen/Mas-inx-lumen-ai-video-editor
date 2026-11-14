@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest'
-import {planConstructionSections,sectionTargets,selectBankContext,type BankedSection} from './construction-sections'
+import {nextContextInspectionProbe,planConstructionSections,sectionTargets,selectBankContext,type BankedSection} from './construction-sections'
 
 describe('duration-aware context banking and local editing',()=>{
  it('uses significantly larger context chunks, but bounded edit windows, for longer recordings',()=>{
@@ -47,6 +47,21 @@ describe('duration-aware context banking and local editing',()=>{
   expect(result.map(x=>x.reason)).toEqual(['local','linked'])
   expect(selectBankContext(sections,{start:2750,end:3200},'exploration corridor',[],2).map(x=>x.section.id)).toContain('c2')
   expect(selectBankContext(sections,{start:2700,end:3600},'anything',[],1)).toHaveLength(1)
+ })
+ it('automatically uses smaller editing segments around busy periods',()=>{
+  const scope=[{start:0,end:30*60*20}]
+  const quiet=planConstructionSections(scope,30)
+  const noisy=planConstructionSections(scope,30,Array.from({length:28},(_,i)=>({
+    start:i*45+600,end:i*45+601,kind:'visual-change',strength:.8,
+  })))
+  expect(noisy.editing.length).toBeGreaterThan(quiet.editing.length)
+  expect(noisy.context.length).toBe(quiet.context.length)
+ })
+ it('finds the exact missing bounded context probe across saved receipt pages',()=>{
+  const scope={start:100,end:1200}
+  expect(nextContextInspectionProbe(scope,[],150)).toEqual({start:100,end:250})
+  expect(nextContextInspectionProbe(scope,[{start:100,end:400},{start:500,end:900}],150)).toEqual({start:400,end:500})
+  expect(nextContextInspectionProbe(scope,[{start:100,end:600},{start:600,end:1200}],150)).toBeNull()
  })
  it('does not promote unbanked footage into verified global context',()=>{
   const bank:BankedSection[]=[
