@@ -58,6 +58,11 @@ describe('bounded persistent video-construction call chains',()=>{
   // A known 429 is retriable even if its message is unhelpful.
   expect(isTransientConstructionError({status:429,message:'irrelevant'})).toBe(true)
  })
+ it('does not crash on circular provider error metadata',()=>{
+  const error:{code:string;cause?:unknown}={code:'ECONNRESET'}
+  error.cause=error
+  expect(isTransientConstructionError(error)).toBe(true)
+ })
  it('applies a finite escalating delay with extra caution after rate limiting',()=>{
   expect(constructionRetryDelayMs(1,{status:503})).toBe(750)
   expect(constructionRetryDelayMs(2,{status:503})).toBe(1500)
