@@ -2,13 +2,19 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import type { Project } from '@/editor/types'
 vi.mock('@/engine/stills',()=>({timelineStills:async(_p:Project,frames:number[],width:number)=>frames.map(()=>({width,height:width*9/16})),canvasBase64:()=> 'image',contactSheet:()=>({}),mediaStills:()=>[]}))
 vi.mock('@/project/session',()=>({useSession:{getState:()=>({path:'/test.lumen'})},saveProject:async()=>true,isDirty:()=>false}))
-vi.mock('@/engine/audio-engine',async original=>({...await original<typeof import('@/engine/audio-engine')>(),prepareAudio:async()=>{},renderMix:async()=>({sampleRate:48000,length:48000,duration:1,numberOfChannels:1,getChannelData:()=>new Float32Array(48000)})}))
+const audioMock=vi.hoisted(()=>({click:false}))
+vi.mock('@/engine/audio-engine',async original=>({...await original<typeof import('@/engine/audio-engine')>(),prepareAudio:async()=>{},renderMix:async()=>{
+ const d=new Float32Array(48000)
+ if(audioMock.click){d.fill(.35,0,24000);d.fill(-.65,24000)}
+ return {sampleRate:48000,length:48000,duration:1,numberOfChannels:1,getChannelData:()=>d}
+}}))
 const { VIDEO_CONSTRUCTION_TOOLS }=await import('./video-construction')
 const { useEditor,getProject,dispatch }=await import('@/editor/store')
 const { createEmptyProject }=await import('@/editor/new-project')
 const { createClip }=await import('@/editor/defaults')
 const run=(name:string,args:Record<string,unknown>={})=>VIDEO_CONSTRUCTION_TOOLS.find(t=>t.name===name)!.run(args)
 beforeEach(()=>{
+ audioMock.click=false
  const p=createEmptyProject('Video');const c=createClip({kind:'video',trackId:p.tracks[0].id,start:0,duration:300});p.clips[c.id]=c;useEditor.getState().loadProject(p)
 })
 it('registers a resumable workflow and marks project dirty without changing clips',async()=>{
@@ -71,7 +77,14 @@ it('requires actual output inspection before recording a successful review',asyn
  expect(evidence.saved).toBe(true)
  expect(evidence.report.flags).toContain('silent-or-unverifiable')
  expect(await run('review_video_construction',{story:'Setup and payoff remain',pacing:'Waiting shortened without losing reaction',issues:[]})).toMatchObject({status:{complete:true}})
- expect(await run('review_video_construction',{story:'Callback missing',pacing:'Transition disrupts the story',issues:['The callback setup needs another inspection']})).toMatchObject({status:{complete:false}})
+ // A risky join cannot silently pass review; the model must explicitly assess it.
+ audioMock.click=true
+ const risk=await run('inspect_construction_join_audio',{join_frame:100}) as any
+ expect(risk.report.flags).toContain('possible-click')
+ await expect(run('review_video_construction',{story:'Fine',pacing:'Fine',issues:[]})).rejects.toThrow(/verdict/i)
+ const join_verdicts=[{frame:100,verdict:'accept',reason:'A deliberately abrupt cut at the on-screen impact, justified by the inspected action and timing.'}]
+ expect(await run('review_video_construction',{story:'The impact stays clear',pacing:'The hard edit is deliberate',issues:[],join_verdicts})).toMatchObject({status:{complete:true}})
+ expect(await run('review_video_construction',{story:'Callback missing',pacing:'Transition disrupts the story',issues:['The callback setup needs another inspection'],join_verdicts})).toMatchObject({status:{complete:false}})
  const repaired=await run('begin_construction_repair',{goal:'Fix the callback continuity within the current timeline'}) as any
  expect(repaired.repairOf).toMatchObject({depth:1,targetFrames:[100]})
  expect(getProject().construction?.applied).toBeUndefined()
