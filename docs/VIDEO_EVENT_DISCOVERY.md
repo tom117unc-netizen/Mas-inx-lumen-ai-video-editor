@@ -6,13 +6,14 @@ This milestone adds a **timed event-candidate index** to the persistent, timelin
 
 1. Start an edit with `begin_video_construction`. The footage to use must already be on the open timeline.
 2. Use `scan_construction_events` to cover each original permitted range in **non-overlapping windows of at most 60 seconds**. Read `get_video_construction` after each scan to see `discoveryScans`, `discoveryEvents` and the next `status.uncovered` range when discovery remains unfinished. A repeated request for the exact same range reuses the existing scan.
-3. The tool renders low-resolution pictures of the actual timeline at roughly **two samples per second**, a bounded 8 kHz timeline audio mix, and synchronizes existing transcript phrases and clip boundaries. It identifies **candidate** speech stretches, unusually large visual changes, audio level rises/drops and clip transitions. It does not identify a game, objective, funny joke, death, laughter or night ending by itself.
-4. For candidate moments likely to affect an edit, call `inspect_video_range` around the event (and `inspect_construction_audio` with a compatible model when listening is necessary). Then call `review_discovered_event` using an exact candidate ID, an actual inspection receipt covering the candidate, a reason and one decision:
+3. Use `get_discovery_queue` to inspect the most consequential *unresolved* candidates first, particularly those overlapping a proposed removal. Its ranking reflects uncertainty and edit risk, **not narrative value**. `review_discovered_events` can commit up to 20 individually inspected decisions atomically; one missing receipt rejects the entire batch.
+4. The tool renders low-resolution pictures of the actual timeline at roughly **two samples per second**, a bounded 8 kHz timeline audio mix, and synchronizes existing transcript phrases and clip boundaries. It identifies **candidate** speech stretches, unusually large visual changes, audio level rises/drops and clip transitions. It does not identify a game, objective, funny joke, death, laughter or night ending by itself.
+5. For candidate moments likely to affect an edit, call `inspect_video_range` around the event (and `inspect_construction_audio` with a compatible model when listening is necessary). Then call `review_discovered_event` using an exact candidate ID, an actual inspection receipt covering the candidate, a reason and one decision:
    - `keep`: protected from planned removal.
    - `discard`: may be removed if all the existing story, speech-boundary and cut-context gates also pass.
    - `uncertain`: cannot be removed until the uncertainty is resolved.
-5. Build story beats, protected reactions/setups, and cuts as before. If even one event scan was started, applying cuts requires complete scan coverage of the original timeline. A cut crossing any pending, uncertain or protected candidate is rejected; a candidate discarded after review can be considered for removal.
-6. Complete the existing full output and join-audio review. The indexed event inventory remains saved in the .lumen project and can be paginated after a restart.
+6. Build story beats, protected reactions/setups, and cuts as before. If even one event scan was started, applying cuts requires complete scan coverage of the original timeline. A cut crossing any pending, uncertain or protected candidate is rejected; a candidate discarded after review can be considered for removal.
+7. Complete the existing full output and join-audio review. The indexed event inventory remains saved in the .lumen project and can be paginated after a restart.
 
 ## Evidence provenance
 
