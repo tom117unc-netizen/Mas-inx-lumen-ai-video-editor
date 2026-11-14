@@ -23,12 +23,16 @@ export type StoryBeat = z.infer<typeof beatSchema>
 export type ConstructionCut = z.infer<typeof cutSchema>
 export interface InspectionReceipt extends FrameRange {id:string;frames:number[];audio:boolean;transcript:boolean}
 export interface ContextInspectionReceipt {cutId:string;storySignature:string}
+export interface ConstructionAudioSample {id:string;start:number;end:number;fingerprint:string;purpose:string}
+export interface ConstructionAudioObservation {id:string;sampleId:string;eventType:'speech_delivery'|'laughter'|'game_sound'|'music'|'silence'|'uncertain';summary:string;audibleCues:string;confidence:'low'|'medium'|'high';uncertainty:string}
 export interface ConstructionJoinAudioCheck {frame:number;fingerprint:string;report:JoinAudioReport|null}
 export interface ConstructionJoinVerdict {frame:number;verdict:'accept'|'repair';reason:string}
 export interface ConstructionState {
   version:1; paused?:boolean; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
   coverage:z.infer<typeof coverageSchema>[];beats:StoryBeat[];cuts:ConstructionCut[];inspections:InspectionReceipt[];
   contextInspections?:ContextInspectionReceipt[];
+  audioSamples?:ConstructionAudioSample[];
+  audioObservations?:ConstructionAudioObservation[];
   joinAudioChecks?:ConstructionJoinAudioCheck[];
   repairOf?:{fingerprint:string;targetFrames:number[];issues:string[];depth:number};
   applied?:{fingerprint:string;joins:number[]};
