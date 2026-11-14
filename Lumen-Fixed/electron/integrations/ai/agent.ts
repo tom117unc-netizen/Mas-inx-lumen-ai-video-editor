@@ -437,14 +437,20 @@ async function runModel(req: AgentRunRequest) {
           completed=[]
           continue
         }
-        if(constructionActive && transientRetries<CONSTRUCTION_MAX_TRANSIENT_RETRIES &&
-           isTransientConstructionError(err,deadline.signal.aborted)) {
+        if(constructionActive && isTransientConstructionError(err,deadline.signal.aborted)) {
           // The failed model call may already have edited and checkpointed a
           // scene. Never replay its partial tool-call transcript: recover the
           // saved state and request the next idempotent, bounded work unit.
           const report=await callEditorTool('get_video_construction',{limit:5})
           const snapshot=report.structuredContent as {status?:{stage?:string;complete?:boolean}}|undefined
-          if(!report.isError && snapshot?.status?.stage &&
+          if(!report.isError && snapshot?.status?.complete) {
+            // The last provider response was lost but the editor's persisted
+            // state confirms that all construction/review gates passed.
+            emit({type:'text',delta:'\\n\\nThe provider response was interrupted, but Lumen verified that video construction and its saved review are complete.'})
+            emit({type:'done',usage})
+            return
+          }
+          if(transientRetries<CONSTRUCTION_MAX_TRANSIENT_RETRIES && !report.isError && snapshot?.status?.stage &&
              !['stale','paused','complete'].includes(snapshot.status.stage) &&
              !snapshot.status.complete) {
             transientRetries++
