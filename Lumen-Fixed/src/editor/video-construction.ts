@@ -38,7 +38,7 @@ export interface ConstructionJoinVerdict {frame:number;verdict:'accept'|'repair'
 export interface ConstructionSectionPlan {
   originalFrames:number;contextTargetFrames:number;editTargetFrames:number;
   context:BankedSection[];editing:(PlannedSection & {planned?:boolean;summary?:string;evidenceIds?:string[];linkedContextIds?:string[]})[];
-  reads?:{editSectionId:string;bankSectionIds:string[];revision:number}[];
+  reads?:{editSectionId:string;bankSectionIds:string[];revision:number;question?:string}[];
 }
 export interface ConstructionState {
   sections?:ConstructionSectionPlan;
