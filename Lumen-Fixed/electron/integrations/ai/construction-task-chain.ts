@@ -17,6 +17,7 @@ interface Snapshot {
   next_context_section?:unknown;next_context_probe?:unknown;next_context_inspection_ids?:unknown;next_edit_section?:unknown
   sectionPlan?:{context_target_frames?:unknown;edit_target_frames?:unknown;pending_context?:unknown;pending_editing?:unknown}
   discoveryPending?:unknown
+  sourceSelections?:{total?:unknown};assembly?:unknown
   beats?:{total?:unknown};cuts?:{total?:unknown}
   discoveryScans?:{total?:unknown};discoveryEvents?:{total?:unknown}
   inspections?:{total?:unknown};joinAudioChecks?:{total?:unknown}
@@ -78,6 +79,10 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
     task=count(s.discoveryPending)>0
       ?'Use get_discovery_queue to find a candidate potentially affected by proposed deletions. Inspect its exact range using focused frames and real audio if necessary; save a justified keep/discard/uncertain decision. Do not discard based on a sampled overview.'
       :`Plan ONE local section ${editLabel}${editRange?` [${editRange.start}, ${editRange.end})`:''} using get_construction_edit_context, which searches the complete bank. Investigate distant setup/payoff links, inspect edge frames, record relevant beats/cuts, then call record_construction_edit_section with real receipts. Never treat local footage as self-contained if its humour or story requires another section. Do not apply until ALL editing sections are planned.`
+  } else if(stage==='assemble'){
+    task=count(s.sourceSelections?.total)
+      ?'KEEP-FIRST ASSEMBLY: reread sourceSelections and the full source-backed story plan. Continue recording remaining strongest original-timeline moments with record_keep_first_selections, including the complete opening hook/setup, essential dependencies, unresolved events and meaningful ending, in FINAL narrative order. Preview with preview_keep_first_assembly; when it passes, call publish_keep_first_assembly to create a NEW editable timeline. If validation fails, inspect and correct ONLY the flagged omission/order/edge; never delete the original timeline.'
+      :'KEEP-FIRST STORY SELECTION: use the full context bank and actual inspected original timeline evidence to select the first few strongest story moments via record_keep_first_selections. State explicit output_order, real source start/end, role, beat_id and inspector receipt IDs. Build hook, setup, escalation, payoff and ending across several small calls. Do NOT import new footage or apply destructive timeline.removeRange.';
   } else if(stage==='review'){
     task=reviewIssues.length
       ?`A completed review found a real defect: ${reviewIssues.map(x=>brief(x,180)).join(' | ')}. Use begin_construction_repair for one focused, bounded correction pass on the CURRENT permitted timeline; do not claim the edit is finished or assume deleted source is recoverable.`
@@ -88,7 +93,7 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   return [
     'LUMEN AUTONOMOUS VIDEO CONSTRUCTION — NEXT SMALL VERIFIED STEP',
     `Goal: ${brief(s.goal,2000)||'Use the saved project goal'}`,
-    `Saved state: stage=${stage}; revision=${count(s.revision)}; fps=${fps}; context bank pending=${count(s.sectionPlan?.pending_context)}; local edit sections pending=${count(s.sectionPlan?.pending_editing)}; context target frames=${count(s.sectionPlan?.context_target_frames)}; editing target frames=${count(s.sectionPlan?.edit_target_frames)}; discovery scans=${count(s.discoveryScans?.total)}; candidates=${count(s.discoveryEvents?.total)}; pending candidates=${count(s.discoveryPending)}; beats=${count(s.beats?.total)}; proposed cuts=${count(s.cuts?.total)}.`,
+    `Saved state: stage=${stage}; revision=${count(s.revision)}; fps=${fps}; context bank pending=${count(s.sectionPlan?.pending_context)}; local edit sections pending=${count(s.sectionPlan?.pending_editing)}; context target frames=${count(s.sectionPlan?.context_target_frames)}; editing target frames=${count(s.sectionPlan?.edit_target_frames)}; discovery scans=${count(s.discoveryScans?.total)}; candidates=${count(s.discoveryEvents?.total)}; pending candidates=${count(s.discoveryPending)}; beats=${count(s.beats?.total)}; proposed cuts=${count(s.cuts?.total)}; retained source selections=${count(s.sourceSelections?.total)}.`,
     recovery?`Recovery: ${brief(recovery,250)}. The previous request may have partially executed. Re-read saved state; do NOT replay unverified edits.`:'',
     `Task: ${task}`,
     'Start with get_video_construction (limit 5) and follow its current saved status. Do only this focused work unit, persist a durable checkpoint and return a concise result. No need to solve the whole movie in this call.',
