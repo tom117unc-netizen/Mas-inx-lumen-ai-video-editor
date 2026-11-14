@@ -163,7 +163,7 @@ export function constructionStatus(p:Project,s:ConstructionState) {
   if(s.applied) {
     const review=s.review
     const complete=!!review && review.fingerprint===s.applied.fingerprint && !review.issues.length && s.applied.joins.every(j=>review.joins.includes(j))
-    return {stage:complete?'complete':'review',complete,uncovered:[],next:complete?'Finished editorial checks':'Inspect the edited joins, then review story and pacing across the full output'}
+    return {stage:complete?'complete':'review',complete,uncovered:[],next:complete?'Finished editorial checks':'Inspect edited join frames and rendered join audio, then review story and pacing across the whole output'}
   }
   const uncovered=uncoveredRanges(s)
   return {stage:uncovered.length?'investigate':s.beats.length?'refine':'map',complete:false,uncovered,next:uncovered.length?'Inspect uncovered timeline ranges with audio and pictures':s.beats.length?'Refine scene cuts, call inspect_cut_context for each cut, inspect neighbouring frames and validate dialogue boundaries':'Map chapters, scenes, setups, payoffs and their dependencies'}
