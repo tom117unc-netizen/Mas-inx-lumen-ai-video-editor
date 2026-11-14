@@ -3,7 +3,7 @@
 import { CONSTRUCTION_MAX_BATCHES } from './construction-task-chain'
 
 export function isConstructionExecutionTool(name: string) {
-  return name === 'begin_video_construction' || name === 'resume_video_construction' || name === 'begin_construction_repair'
+  return name === 'begin_video_construction' || name === 'resume_video_construction' || name === 'begin_construction_repair' || name === 'reopen_construction_source_for_repair'
 }
 
 /** A bounded continuation policy; the durable project, not chat history, is the
