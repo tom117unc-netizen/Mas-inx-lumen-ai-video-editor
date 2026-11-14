@@ -120,3 +120,26 @@ it('supports explicit pause and resume without discarding the story map',async()
  await run('resume_video_construction')
  expect(await run('get_video_construction')).toMatchObject({status:{stage:'investigate'},beats:{total:1}})
 })
+
+
+it('returns a bounded, real timeline WAV and persists an audio evidence receipt',async()=>{
+ await run('begin_video_construction',{goal:'Check whether the sound is a laugh or an impact'})
+ const clip=await run('inspect_construction_audio',{start_frame:30,end_frame:150,purpose:'Check how the joke is delivered'}) as any
+ expect(clip.audio).toMatchObject({mimeType:'audio/wav'})
+ expect(clip.audio.data).toMatch(/^[A-Za-z0-9+/=]+$/)
+ expect(clip.json).toMatchObject({start_frame:30,end_frame:150,purpose:'Check how the joke is delivered'})
+ expect(getProject().construction?.audioSamples?.[0]).toMatchObject({id:clip.json.audio_sample_id,start:30,end:150})
+ const found=await run('record_construction_audio_observation',{sample_id:clip.json.audio_sample_id,
+   event_type:'uncertain',summary:'No known dialogue from transcript; audio inference uncertain',confidence:'low',
+   audible_cues:'No identifiable event in mocked source',uncertainty:'Mocked audio is silent'}) as any
+ expect(found.saved).toBe(true)
+ expect(getProject().construction?.audioObservations?.[0].sampleId).toBe(clip.json.audio_sample_id)
+ await expect(run('record_construction_audio_observation',{sample_id:'invented',
+   event_type:'laughter',summary:'Someone laughed',confidence:'high',audible_cues:'A laugh was heard',uncertainty:'None'})).rejects.toThrow(/sample/i)
+})
+it('refuses unbounded or out-of-scope audio uploads',async()=>{
+ await run('begin_video_construction',{goal:'Inspect sounds'})
+ await expect(run('inspect_construction_audio',{start_frame:0,end_frame:500,purpose:'listen'})).rejects.toThrow(/scope|12/i)
+ await expect(run('inspect_construction_audio',{start_frame:0,end_frame:300,purpose:'listen'})).toBeTruthy()
+ await expect(run('inspect_construction_audio',{start_frame:0,end_frame:0,purpose:'listen'})).rejects.toThrow()
+})
