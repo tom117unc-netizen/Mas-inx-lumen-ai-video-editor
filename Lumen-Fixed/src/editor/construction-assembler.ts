@@ -5,6 +5,7 @@
  * from elsewhere. The source->output map makes every editorial decision
  * independently inspectable and allows later repair/rebuild.
  */
+import { current, isDraft } from 'immer'
 import { uid } from '@/lib/id'
 import { cloneClip, clipEnd, splitClip } from './ops'
 import { freshName } from './sequences'
@@ -164,7 +165,8 @@ function mainTrackFullyCovered(m:ImmutableSourceManifest,items:SourceSelection[]
 }
 export function composeKeepFirstSequence(p:Project,s:ConstructionState,name='Lumen assembled video'):KeepFirstOutput {
   const items=validateKeepFirstSelections(p,s)
-  const m=s.sourceManifest!
+  const manifest=s.sourceManifest!
+  const m=structuredClone(isDraft(manifest)?current(manifest):manifest)
   const trackIds=new Map(m.tracks.map(t=>[t.id,uid('track')]))
   const tracks=m.tracks.map(t=>{
     const copy=structuredClone(t)
