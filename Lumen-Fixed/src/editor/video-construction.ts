@@ -123,7 +123,8 @@ export function beginConstruction(p:Project,goal:string,sectioned=false):Constru
   return {version:1,discoveryRequired:true,revision:0,sections,sourceManifest,sourceSelections:[],projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint,goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
 }
 function assertFresh(p:Project,s:ConstructionState) {
-  if(s.projectId!==p.id || s.sequenceId!==(p.sequence?.id??'main') || (s.applied?.fingerprint??s.fingerprint)!==constructionFingerprint(p)) throw new Error('Timeline changed: construction is stale. Re-map the current timeline before editing.')
+  const requiredSequence=s.assembly&&s.applied?s.assembly.sequenceId:s.sequenceId
+  if(s.projectId!==p.id || requiredSequence!==(p.sequence?.id??'main') || (s.applied?.fingerprint??s.fingerprint)!==constructionFingerprint(p)) throw new Error('Timeline changed: construction is stale. Re-map the current timeline before editing.')
 }
 export function unscannedDiscoveryRanges(s:ConstructionState):FrameRange[] {
   let holes=s.scope.map(r=>({...r}))
