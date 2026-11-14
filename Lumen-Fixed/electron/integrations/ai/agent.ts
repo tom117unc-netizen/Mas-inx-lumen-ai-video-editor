@@ -446,7 +446,7 @@ async function runModel(req: AgentRunRequest) {
           if(!report.isError && snapshot?.status?.complete) {
             // The last provider response was lost but the editor's persisted
             // state confirms that all construction/review gates passed.
-            emit({type:'text',delta:'\\n\\nThe provider response was interrupted, but Lumen verified that video construction and its saved review are complete.'})
+            emit({type:'text',delta:'\n\nThe provider response was interrupted, but Lumen verified that video construction and its saved review are complete.'})
             emit({type:'done',usage})
             return
           }
