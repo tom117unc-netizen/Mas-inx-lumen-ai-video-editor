@@ -8,6 +8,7 @@
 import { current, isDraft } from 'immer'
 import { uid } from '@/lib/id'
 import { cloneClip, clipEnd, splitClip } from './ops'
+import { speechCutContext } from './construction-context'
 import { freshName } from './sequences'
 import type { Clip, Marker, Project, ProjectSettings, Sequence, Track } from './types'
 import type { ConstructionState, FrameRange } from './video-construction'
@@ -111,6 +112,18 @@ export function validateKeepFirstSelections(p:Project,s:ConstructionState):Sourc
     const receipts=s.inspections.filter(i=>item.evidenceIds.includes(i.id)&&i.audio&&i.frames.length)
     if(!mergeRanges(receipts).some(r=>contains(r,item)))
       throw new Error(`Selection ${item.id} has not been audiovisually inspected over its entire source range`)
+    const seenFrames=new Set(receipts.flatMap(i=>i.frames))
+    for(const edge of [item.start,item.end]){
+      for(const f of [edge-1,edge,edge+1]){
+        if(f>=0 && s.scope.some(r=>r.start<=f&&r.end>f) && !seenFrames.has(f))
+          throw new Error(`Selection ${item.id} needs exact neighbouring frame inspection at output edge ${edge} (missing ${f}); inspect_video_range boundary mode first`)
+      }
+    }
+    const words=speechCutContext(p,item,1)
+    if(words.violations.length){
+      const first=words.violations[0]
+      throw new Error(`Selection ${item.id} interrupts transcribed dialogue at its ${first.edge} edge (frame ${first.frame}); refine and listen before publishing`)
+    }
     if(!Object.values(manifest.clips).some(c=>overlap({start:c.start,end:clipEnd(c)},item)))
       throw new Error(`Selection ${item.id} contains no authorised source clips`)
   }
