@@ -414,6 +414,12 @@ it('publishes an independently editable output sequence without changing the ori
  expect(mapping.clips[0].originalClipId).toBe(clip.id)
  expect(mapping.clips[0].outputClipId).not.toBe(clip.id)
  expect(Object.values(project.clips)[0].duration).toBe(300)
+ expect(await run('audit_assembled_source_map')).toMatchObject({available:true,ok:true,checkedClips:1,outputFrames:300})
+ const corrupted=structuredClone(project)
+ corrupted.clips[mapping.clips[0].outputClipId].inPoint+=7
+ const {auditPublishedAssembly}=await import('@/editor/construction-assembler')
+ expect(auditPublishedAssembly(corrupted,corrupted.construction!).issues).toEqual(
+   expect.arrayContaining([expect.stringMatching(/in-point|timing/i)]))
  await expect(run('publish_keep_first_assembly')).rejects.toThrow(/already|published/i)
  useEditor.getState().undo()
  expect(getProject().sequence?.id??'seq_main').toBe(originalId)
