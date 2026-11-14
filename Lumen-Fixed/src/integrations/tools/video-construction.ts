@@ -206,8 +206,9 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const p=getProject()
       const goal=z.string().trim().min(1).max(2000).parse(a.goal)
       const next=beginConstruction(p,goal)
+      const targeted=previous.review.joinVerdicts?.filter(v=>v.verdict==='repair').map(v=>v.frame)
       next.repairOf={fingerprint:previous.applied.fingerprint,
-        targetFrames:previous.review.joinVerdicts?.filter(v=>v.verdict==='repair').map(v=>v.frame)??previous.applied.joins,
+        targetFrames:targeted?.length ? targeted : previous.applied.joins,
         issues:[...previous.review.issues].slice(0,100),depth}
       await persist(next)
       return {status:constructionStatus(getProject(),next),repairOf:next.repairOf,
