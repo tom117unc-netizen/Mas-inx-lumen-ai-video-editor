@@ -8,6 +8,7 @@ it('continues incomplete work only while it makes bounded progress',()=>{
  expect(constructionContinuation({...snapshot,inspections:{total:20}},1,first.progress).continue).toBe(true)
  expect(constructionContinuation({...snapshot,contextInspections:{total:1}},1,first.progress).continue).toBe(true)
  expect(constructionContinuation({...snapshot,joinAudioChecks:{total:1}},1,first.progress).continue).toBe(true)
+ expect(constructionContinuation({...snapshot,audioObservations:{total:1}},1,first.progress).continue).toBe(true)
  expect(constructionContinuation(snapshot,12).continue).toBe(false)
 })
 it('never continues completed, stale, absent or malformed construction',()=>{
