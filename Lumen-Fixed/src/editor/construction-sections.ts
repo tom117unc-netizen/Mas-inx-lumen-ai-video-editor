@@ -68,6 +68,25 @@ export function planConstructionSections(
   if(context.length>2000||editing.length>12000)throw new Error('Footage exceeds section scheduling budget; split the timeline into authorised sequences')
   return {totalFrames,totalSeconds,contextTargetFrames,editTargetFrames,context,editing}
 }
+/** Find the first uninspected part of one bank section. Existing receipts are
+ * measured, not continuous observation; this is a scheduling aid only.
+ * Always account for all receipts, not just the first paginated status page. */
+export function nextContextInspectionProbe(
+  section:SectionRange,inspected:SectionRange[],maxFrames:number,
+):SectionRange|null {
+  if(!validRange(section)||!Number.isSafeInteger(maxFrames)||maxFrames<1)
+    throw new Error('Invalid context inspection probe')
+  const covered=inspected.filter(validRange).map(r=>({
+    start:Math.max(section.start,r.start),end:Math.min(section.end,r.end)
+  })).filter(validRange).sort((a,b)=>a.start-b.start)
+  let cursor=section.start
+  for(const r of covered){
+    if(r.start>cursor) return {start:cursor,end:Math.min(r.start,cursor+maxFrames)}
+    cursor=Math.max(cursor,r.end)
+    if(cursor>=section.end)return null
+  }
+  return cursor<section.end?{start:cursor,end:Math.min(section.end,cursor+maxFrames)}:null
+}
 export interface BankedSection extends PlannedSection {
   summary?:string;keyMoments?:string[];evidenceIds?:string[];uncertainties?:string[];indexed?:boolean
 }
