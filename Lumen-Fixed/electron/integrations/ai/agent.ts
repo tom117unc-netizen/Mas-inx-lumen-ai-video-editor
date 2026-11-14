@@ -166,6 +166,7 @@ function buildTools(
   audioSupported: boolean,
   modes: () => { native: boolean; vision: boolean },
   getAnalyse?: AgentVisualAnalyserFactory,
+  onToolExecution?: (toolName:string)=>void,
 ): ToolSet {
   const tools: ToolSet = {}
   for (const def of defs) {
@@ -173,6 +174,7 @@ function buildTools(
       description: def.description,
       inputSchema: jsonSchema(cleanSchema(def.inputSchema)),
       execute: async (input, { toolCallId }): Promise<ToolOutput> => {
+        onToolExecution?.(def.name)
         const res = await callEditorTool(def.name, (input ?? {}) as Record<string, unknown>)
         const text = res.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n')
         if (res.isError) throw new Error(text || 'The tool failed.')
@@ -238,6 +240,7 @@ async function runModel(req: AgentRunRequest) {
     const pictures = new Map<string, Picture[]>()
     const audioSamples = new Map<string,AudioSnippet[]>()
     const audioSupported=canReceiveTimelineAudio(provider,modelId)
+    let constructionActive=false
     const visionCache = new VisionEvidenceCache()
     let analyserPromise: Promise<AgentVisualAnalyser | undefined> | undefined
     const getAnalyse: AgentVisualAnalyserFactory = () => {
@@ -267,7 +270,8 @@ async function runModel(req: AgentRunRequest) {
       })().catch(() => undefined)
       return analyserPromise
     }
-    const tools = buildTools(await editorTools(), pictures,audioSamples,audioSupported, () => ({ native, vision }), getAnalyse)
+    const tools = buildTools(await editorTools(), pictures,audioSamples,audioSupported, () => ({ native, vision }), getAnalyse,
+      name=>{if(isConstructionExecutionTool(name))constructionActive=true})
 
     const stored = historyOf(req.conversationId)
     const history = native ? stripReasoning(stored) : stored
@@ -278,7 +282,6 @@ async function runModel(req: AgentRunRequest) {
     let afterTool = false
     let usage: { inputTokens?: number; outputTokens?: number } | undefined
     const retried = { pictures: false, effort: false }
-    let constructionActive = false
     let constructionBatches = 0
     let constructionProgress: string | undefined
     let transientRetries = 0
