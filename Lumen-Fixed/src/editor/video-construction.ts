@@ -35,7 +35,7 @@ export interface ConstructionAudioObservation {id:string;sampleId:string;eventTy
 export interface ConstructionJoinAudioCheck {frame:number;fingerprint:string;report:JoinAudioReport|null}
 export interface ConstructionJoinVerdict {frame:number;verdict:'accept'|'repair';reason:string}
 export interface ConstructionState {
-  version:1; paused?:boolean; discoveryRequired?:boolean; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
+  version:1; paused?:boolean; discoveryRequired?:boolean; revision?:number; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
   coverage:z.infer<typeof coverageSchema>[];beats:StoryBeat[];cuts:ConstructionCut[];inspections:InspectionReceipt[];
   contextInspections?:ContextInspectionReceipt[];
   discoveryScans?:DiscoveryScan[];
@@ -87,7 +87,7 @@ export function beginConstruction(p:Project,goal:string):ConstructionState {
   const scope=mergeRanges(Object.values(p.clips).map(c=>({start:c.start,end:c.start+c.duration})))
   if(!scope.length) throw new Error('Put the permitted footage on the timeline first.')
   scope.forEach(r=>range.parse(r))
-  return {version:1,discoveryRequired:true,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
+  return {version:1,discoveryRequired:true,revision:0,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
 }
 function assertFresh(p:Project,s:ConstructionState) {
   if(s.projectId!==p.id || s.sequenceId!==(p.sequence?.id??'main') || (s.applied?.fingerprint??s.fingerprint)!==constructionFingerprint(p)) throw new Error('Timeline changed: construction is stale. Re-map the current timeline before editing.')
