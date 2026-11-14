@@ -20,11 +20,14 @@ import { uid } from '@/lib/id'
 /** Sound from a video on an overlay track may also carry commentary; do not
  * mistake a lack of a 'Voice' or 'Main' role for proof of no speech. */
 function missingTimelineTranscripts(p:ReturnType<typeof getProject>) {
-  const ids=new Set(untranscribed(p))
+  // A completed speech-to-text pass can legitimately produce zero phrases for
+  // gameplay-only audio. An explicit [] is analysed-but-no-speech-detected,
+  // NOT missing metadata. This still is not proof that audio is silent.
+  const ids=new Set(untranscribed(p).filter(id=>!Array.isArray(p.assets[id]?.transcript)))
   for(const c of Object.values(p.clips)) {
     if(c.kind!=='video'||!c.assetId||!isAudible(p,c))continue
     const asset=p.assets[c.assetId]
-    if(asset && !speechScript(asset).length)ids.add(asset.id)
+    if(asset && !Array.isArray(asset.transcript) && !speechScript(asset).length)ids.add(asset.id)
   }
   return [...ids]
 }
