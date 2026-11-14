@@ -31,7 +31,7 @@ describe('bounded persistent video-construction call chains',()=>{
   const first=constructionTaskPrompt({...base,next_context_probe:{section_id:'context-1',start:0,end:1800}})
   expect(first).toMatch(/GLOBAL CONTEXT BANKING PASS/)
   expect(first).toMatch(/\[0, 1800\)/)
-  expect(first).not.toMatch(/start choosing deletions/)
+  expect(first).toMatch(/Do not start choosing deletions/)
   const last=constructionTaskPrompt({...base,next_context_probe:null,
     next_context_inspection_ids:['overview-1','overview-2','overview-3','overview-4']})
   expect(last).toMatch(/record_construction_context_section/)
