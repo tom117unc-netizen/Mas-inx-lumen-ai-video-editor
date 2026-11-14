@@ -111,7 +111,7 @@ export function validateKeepFirstSelections(p:Project,s:ConstructionState):Sourc
     const receipts=s.inspections.filter(i=>item.evidenceIds.includes(i.id)&&i.audio&&i.frames.length)
     if(!mergeRanges(receipts).some(r=>contains(r,item)))
       throw new Error(`Selection ${item.id} has not been audiovisually inspected over its entire source range`)
-    if(!Object.values(manifest.clips).some(c=>overlap(c,item)))
+    if(!Object.values(manifest.clips).some(c=>overlap({start:c.start,end:clipEnd(c)},item)))
       throw new Error(`Selection ${item.id} contains no authorised source clips`)
   }
   const first=items[0].role,last=items[items.length-1].role
