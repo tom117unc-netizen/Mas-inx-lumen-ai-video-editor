@@ -10,6 +10,8 @@ import { z } from 'zod'
 import { uid } from '@/lib/id'
 import { createClip, createTrack, DEFAULT_BUS, DEFAULT_COMPRESSOR, DEFAULT_EQ, DEFAULT_LIMITER, IDENTITY_CURVES, NEUTRAL_WHEELS, TRACK_HEIGHTS } from './defaults'
 import { EASING_NAMES, type Easing } from './easing'
+import { composeKeepFirstSequence, validateOutputSourceMap } from './construction-assembler'
+import { constructionFingerprint } from './video-construction'
 import { ANIMATABLE, evalKeyframes } from './keyframes'
 import { MOTION_PRESETS, mergeKeyframes, presetKeyframes, PRESET_IDS } from './motion-presets'
 import { EFFECTS } from './presets'
@@ -1442,6 +1444,50 @@ export const commands = {
       for (const c of Object.values(p.clips)) if (c.matte && ids.has(c.matte.assetId)) delete c.matte
       for (const seq of Object.values(p.sequences ?? {})) for (const c of Object.values(seq.clips)) if (c.matte && ids.has(c.matte.assetId)) delete c.matte
       for (const assetId of ids) delete p.assets[assetId]
+    },
+  }),
+
+  // Source-preserving AI story assembly. This command is an ATOMIC editor
+  // transaction, and therefore one standard undo operation. Both the source
+  // and the resulting sequence remain in the project, with exact provenance.
+  'construction.publishSelection': command({
+    description:'Publish the validated keep-first source selections as a NEW editable sequence. Preserves the entire original timeline, all selected track media and exact frame/source maps. Atomic and undoable; source media is never imported or replaced.',
+    input:z.object({name:z.string().trim().min(1).max(140).optional()}),
+    title:()=> 'Assemble source-backed video sequence',
+    run(p,i) {
+      const state=p.construction
+      if(!state)throw new CommandError('Start video construction before publishing a source-backed selection')
+      let output:ReturnType<typeof composeKeepFirstSequence>
+      try {
+        output=composeKeepFirstSequence(p,state,i.name)
+        validateOutputSourceMap(output,state.sourceManifest!)
+      }catch(err) {
+        throw new CommandError(err instanceof Error?err.message:String(err))
+      }
+      if(output.sequence.id===openSequenceId(p)||p.sequences?.[output.sequence.id])
+        throw new CommandError('Output sequence ID conflicts with an existing timeline')
+      const updated=structuredClone(isDraft(state)?current(state):state)
+      p.sequences??={}
+      p.sequences[output.sequence.id]=output.sequence
+      swapIn(p,output.sequence.id)
+      updated.assembly={
+        sequenceId:output.sequence.id,
+        sourceSequenceId:updated.sourceManifest!.sequenceId,
+        sourceFingerprint:updated.fingerprint,
+        selections:output.selections,clips:output.clips,outputFrames:output.outputFrames,
+      }
+      updated.applied={fingerprint:'',joins:output.joins}
+      updated.inspections=[]
+      updated.joinAudioChecks=[]
+      updated.review=undefined
+      p.construction=updated
+      // Fingerprint includes the CURRENT output timeline and stored source
+      // sequence. Updating applied and its source map in this same transaction
+      // keeps an interrupted model response from producing half a checkpoint.
+      updated.applied.fingerprint=constructionFingerprint(p)
+      return {sequence_id:output.sequence.id,original_sequence_id:updated.assembly.sourceSequenceId,
+        output_frames:output.outputFrames,source_frames:output.originalFrames,
+        joined_frames:output.joins,source_clips:output.clips.length,undoable:true}
     },
   }),
 
