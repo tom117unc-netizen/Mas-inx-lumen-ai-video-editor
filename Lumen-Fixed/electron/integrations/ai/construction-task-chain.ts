@@ -125,8 +125,17 @@ function signalCode(err:unknown):string{
 export function isTransientConstructionError(err:unknown,deadlineExceeded=false){
   if(deadlineExceeded)return true
   const http=status(err)
+  const chain=signalCode(err)
+  const interrupted=/\b(ETIMEDOUT|ECONNRESET|ECONNABORTED|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|AbortError|TimeoutError)\b|timeout|timed out|socket hang up|network connection lost|fetch failed|\bterminated\b/i.test(chain)
+  // HTTP headers may have arrived with 200 OK before the response body was
+  // truncated. The SDK then wraps the actual network cause in a non-retryable
+  // "Failed to process successful response" error. Only retry that exact
+  // case when an independently recognisable transport cause is present.
+  // Bad JSON, schema mismatches and missing tool-calling support are NOT
+  // transient and must not trigger duplicate editing requests.
+  if(http===200)return /Failed to process successful response/i.test(chain)&&interrupted
   if(http!==undefined)return [408,409,425,429,500,502,503,504].includes(http)
-  return /\b(ETIMEDOUT|ECONNRESET|ECONNABORTED|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|AbortError|TimeoutError)\b|timeout|timed out|socket hang up|network connection lost|fetch failed/i.test(signalCode(err))
+  return interrupted
 }
 export function constructionRetryDelayMs(attempt:number,err:unknown) {
   if(!Number.isSafeInteger(attempt)||attempt<1)throw new Error('Retry attempt must be positive')
