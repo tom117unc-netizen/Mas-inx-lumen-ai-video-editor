@@ -117,7 +117,7 @@ it('requires actual output inspection before recording a successful review',asyn
  const repaired=await run('begin_construction_repair',{goal:'Fix the callback continuity within the current timeline'}) as any
  expect(repaired.repairOf).toMatchObject({depth:1,targetFrames:[100]})
  expect(getProject().construction?.applied).toBeUndefined()
- expect(await run('get_video_construction')).toMatchObject({status:{stage:'investigate'},repairOf:{depth:1}})
+ expect(await run('get_video_construction')).toMatchObject({status:{stage:'discover'},repairOf:{depth:1}})
 })
 it('reports an unsafe cut through available speech instead of issuing a receipt',async()=>{
  const p=createEmptyProject('Dialogue')
@@ -146,7 +146,7 @@ it('supports explicit pause and resume without discarding the story map',async()
  await run('pause_video_construction')
  expect(await run('get_video_construction')).toMatchObject({status:{stage:'paused'}})
  await run('resume_video_construction')
- expect(await run('get_video_construction')).toMatchObject({status:{stage:'investigate'},beats:{total:1}})
+ expect(await run('get_video_construction')).toMatchObject({status:{stage:'discover'},beats:{total:1}})
 })
 
 
