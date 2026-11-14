@@ -23,6 +23,30 @@ describe('bounded persistent video-construction call chains',()=>{
   expect(prompt).toMatch(/More pending IDs: 1/)
   expect(prompt).not.toMatch(/Scan ONE/)
  })
+ it('banks the whole timeline in fixed bounded calls before making local edit choices',()=>{
+  const base={goal:'Five rounds with delayed callbacks',fps:30,revision:13,
+    status:{stage:'context-bank',uncovered:[{start:0,end:7200}]},
+    next_context_section:{id:'context-1',start:0,end:7200},
+    sectionPlan:{context_target_frames:7200,edit_target_frames:1800,pending_context:1,pending_editing:4}}
+  const first=constructionTaskPrompt({...base,next_context_probe:{section_id:'context-1',start:0,end:1800}})
+  expect(first).toMatch(/GLOBAL CONTEXT BANKING PASS/)
+  expect(first).toMatch(/\[0, 1800\)/)
+  expect(first).not.toMatch(/start choosing deletions/)
+  const last=constructionTaskPrompt({...base,next_context_probe:null,
+    next_context_inspection_ids:['overview-1','overview-2','overview-3','overview-4']})
+  expect(last).toMatch(/record_construction_context_section/)
+  expect(last).toMatch(/overview-4/)
+ })
+ it('uses all indexed source context when editing a small local section',()=>{
+  const prompt=constructionTaskPrompt({status:{stage:'refine'},fps:30,
+    next_edit_section:{id:'edit-12',start:14400,end:16200},
+    sectionPlan:{pending_context:0,pending_editing:8,context_target_frames:5400,edit_target_frames:1800}})
+  expect(prompt).toMatch(/edit-12/)
+  expect(prompt).toMatch(/\[14400, 16200\)/)
+  expect(prompt).toMatch(/get_construction_edit_context/)
+  expect(prompt).toMatch(/record_construction_edit_section/)
+  expect(prompt).toMatch(/ALL editing sections/)
+ })
  it('restarts after interruption from the persisted checkpoint without reusing old edits',()=>{
   const prompt=constructionTaskPrompt({status:{stage:'investigate',uncovered:[{start:3000,end:3500}]},
     fps:25},'The previous short call hit its deadline')
