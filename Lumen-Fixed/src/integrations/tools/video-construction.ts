@@ -5,6 +5,8 @@ import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, u
 import { timelineTranscript } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
 import { assessVideoQuality, defaultVideoBrief } from '@/editor/video-quality'
+import { assessJoinAudio } from '@/editor/construction-join-audio'
+import { prepareAudio, renderMix } from '@/engine/audio-engine'
 import { timelineStills, canvasBase64 } from '@/engine/stills'
 import { saveProject, useSession } from '@/project/session'
 import { INSPECT_TOOLS } from './inspect'
@@ -64,7 +66,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const s=state(false),offset=z.number().int().min(0).parse(a.offset??0),limit=z.number().int().min(1).max(100).parse(a.limit??40)
       const page=<T>(items:T[])=>({total:items.length,items:items.slice(offset,offset+limit),next_offset:offset+limit<items.length?offset+limit:null})
       const status=constructionStatus(getProject(),s)
-      return {goal:s.goal,fps:s.fps,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),applied:s.applied,review:s.review}
+      return {goal:s.goal,fps:s.fps,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
     },
   },
   {
@@ -158,26 +160,89 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
           for(const c of cuts) {const result=dispatch('timeline.removeRange',{start:c.start,end:c.end},{source:'ai'});if(!result.ok) throw new Error(result.error)}
         } catch(error) {rollbackTo(mark);throw error}
       })
-      const next=structuredClone(s);next.applied={fingerprint:constructionFingerprint(getProject()),joins};next.inspections=[];next.review=undefined
+      const next=structuredClone(s);next.applied={fingerprint:constructionFingerprint(getProject()),joins};next.inspections=[];next.joinAudioChecks=[];next.review=undefined
       await persist(next)
       return {applied:true,joins,removed_frames:removed,status:'review-required',undoable:true}
     },
   },
   {
+    name:'inspect_construction_join_audio',
+    description:'Measure the ACTUAL rendered timeline mix around one post-edit join, at sample resolution. Returns possible click and abrupt-level-shift warnings plus adjacent transcribed speech; measurements are not semantic listening. Saves the evidence in the project and must be run for each join before final review.',
+    inputSchema:obj({join_frame:frame},['join_frame']),
+    run:async a=>{
+      const s=state(),p=getProject(),fingerprint=constructionFingerprint(p)
+      if(!s.applied) throw new Error('Apply the construction before inspecting its resulting joins')
+      const join=z.number().int().nonnegative().parse(a.join_frame)
+      if(!s.applied.joins.includes(join)) throw new Error('Unknown join; use get_video_construction to see exact join frames')
+      const fps=p.settings.fps
+      const duration=Math.max(0,...Object.values(p.clips).map(c=>c.start+c.duration))/fps
+      const at=join/fps,from=Math.max(0,at-.5),to=Math.min(duration,at+.5)
+      if(to<=from) throw new Error('Empty join audio window')
+      await prepareAudio(p)
+      const mix=await renderMix(p,from,to)
+      const index=Math.round((at-from)*mix.sampleRate)
+      const report=index>=1 && index<mix.length
+        ? assessJoinAudio(Array.from({length:mix.numberOfChannels},(_,i)=>mix.getChannelData(i)),mix.sampleRate,index)
+        : null
+      if(constructionFingerprint(getProject())!==fingerprint || getProject().construction!==s) throw new Error('Timeline or construction changed during audio rendering; retry')
+      const next=structuredClone(s)
+      next.joinAudioChecks=[...(next.joinAudioChecks??[]).filter(x=>x.frame!==join),
+        {frame:join,fingerprint,report}]
+      await persist(next)
+      return {join_frame:join,from_seconds:from,to_seconds:to,report,
+        transcript:timelineTranscript(p,Math.max(0,at-3),at+3).slice(0,80),
+        saved:true,limitations:'PCM levels and timed transcripts are not perception of laughter, delivery, gameplay meaning or intentional sound design. No waveform anomaly is definitive; suspicious joins require editorial evaluation.'}
+    },
+  },
+  {
+    name:'begin_construction_repair',
+    description:'Start a fresh bounded editorial pass on the CURRENT edited timeline after review found real problems. Keeps the previous failing join frames and issue explanations as repair context; never restores deleted footage or secretly changes source selection. Requires an unfinished review with unresolved issues.',
+    inputSchema:obj({goal:str('Specific repair objective for failed joins or continuity')},['goal']),
+    run:async a=>{
+      const previous=state()
+      if(!previous.applied || !previous.review?.issues.length) throw new Error('A completed review with unresolved problems is required before repair')
+      const depth=(previous.repairOf?.depth??0)+1
+      if(depth>3) throw new Error('Three repair passes attempted; leave the project for deliberate manual assessment rather than looping forever')
+      const p=getProject()
+      const goal=z.string().trim().min(1).max(2000).parse(a.goal)
+      const next=beginConstruction(p,goal)
+      next.repairOf={fingerprint:previous.applied.fingerprint,
+        targetFrames:previous.review.joinVerdicts?.filter(v=>v.verdict==='repair').map(v=>v.frame)??previous.applied.joins,
+        issues:[...previous.review.issues].slice(0,100),depth}
+      await persist(next)
+      return {status:constructionStatus(getProject(),next),repairOf:next.repairOf,
+        note:'Re-map current timeline content and inspect affected joins before deciding a fix. Removed source material remains excluded; do not add clips from outside the timeline.'}
+    },
+  },
+  {
     name:'review_video_construction',
     description:'Record a post-edit review after inspecting the actual new joins and whole output. Completion requires every join inspected, sampled audiovisual coverage of the output, explicit story/pacing findings, no unresolved issues and no structural errors. Findings are model judgements, not proof of human-quality editing.',
-    inputSchema:obj({story:str('Can a new viewer understand the progression, setups and payoffs?'),pacing:str('Assess internal scene rhythm, necessary silence and transitions'),issues:list('Unresolved problems; empty only if checks passed',str('Problem'),{maxItems:100})},['story','pacing','issues']),
+    inputSchema:obj({story:str('Can a new viewer understand the progression, setups and payoffs?'),pacing:str('Assess internal scene rhythm, necessary silence and transitions'),issues:list('Unresolved problems; empty only if checks passed',str('Problem'),{maxItems:100}),join_verdicts:list('Explicit decision for each flagged audio join; accept only with evidence from the actual scene',obj({frame,verdict:oneOf('Join decision',['accept','repair']),reason:str('Specific rationale explaining intentionality or defect',{minLength:20})},['frame','verdict','reason']),{maxItems:100})},['story','pacing','issues']),
     run:async a=>{
       const s=state();if(!s.applied) throw new Error('Apply the plan before reviewing its output')
-      const findings=z.object({story:z.string().trim().min(1).max(4000),pacing:z.string().trim().min(1).max(4000),issues:z.array(z.string().min(1).max(1000)).max(100)}).parse(a)
+      const findings=z.object({story:z.string().trim().min(1).max(4000),pacing:z.string().trim().min(1).max(4000),issues:z.array(z.string().min(1).max(1000)).max(100),
+        join_verdicts:z.array(z.object({frame:z.number().int().nonnegative(),verdict:z.enum(['accept','repair']),reason:z.string().trim().min(20).max(1500)})).max(100).default([])}).parse(a)
       const p=getProject(),ranges=mergeRanges(Object.values(p.clips).map(c=>({start:c.start,end:c.start+c.duration})))
       const inspected=mergeRanges(s.inspections.filter(i=>i.audio&&i.frames.length).map(i=>({start:i.start,end:i.end})))
       if(ranges.some(r=>!inspected.some(i=>i.start<=r.start&&i.end>=r.end))) throw new Error('Inspect the whole output in bounded audiovisual windows before final review')
       const frames=new Set(s.inspections.flatMap(i=>i.frames))
       for(const join of s.applied.joins) for(const f of [join-1,join,join+1]) if(ranges.some(r=>f>=r.start&&f<r.end)&&!frames.has(f)) throw new Error(`Inspect neighbouring frames at edited join ${join}`)
+      const fingerprint=constructionFingerprint(p)
+      const checks=s.joinAudioChecks??[]
+      for(const join of s.applied.joins) if(!checks.some(c=>c.frame===join && c.fingerprint===fingerprint))
+        throw new Error(`Inspect actual mixed audio at edited join ${join} before final review`)
+      if(new Set(findings.join_verdicts.map(v=>v.frame)).size!==findings.join_verdicts.length)
+        throw new Error('Duplicate audio join verdict')
+      const flagged=checks.filter(c=>c.fingerprint===fingerprint && c.report?.flags.some(f=>f!=='silent-or-unverifiable'))
+      for(const c of flagged) if(!findings.join_verdicts.some(v=>v.frame===c.frame))
+        throw new Error(`Give a reasoned accept/repair verdict for flagged audio join ${c.frame}`)
+      if(findings.join_verdicts.some(v=>!s.applied!.joins.includes(v.frame)))
+        throw new Error('Verdict refers to unknown join')
       const quality=assessVideoQuality(p,defaultVideoBrief('gaming-highlights'))
-      const issues=[...findings.issues,...quality.findings.filter(f=>f.severity==='error').map(f=>f.message)]
-      const next=structuredClone(s);next.review={...findings,issues,joins:s.applied.joins,fingerprint:constructionFingerprint(p)};await persist(next)
+      const issues=[...findings.issues,
+        ...findings.join_verdicts.filter(v=>v.verdict==='repair').map(v=>`Audio join ${v.frame} needs repair: ${v.reason}`),
+        ...quality.findings.filter(f=>f.severity==='error').map(f=>f.message)]
+      const next=structuredClone(s);next.review={story:findings.story,pacing:findings.pacing,issues,joinVerdicts:findings.join_verdicts,joins:s.applied.joins,fingerprint};await persist(next)
       return {status:constructionStatus(p,next),quality}
     },
   },
