@@ -375,6 +375,8 @@ const TOOL_TITLES: Record<string, string> = {
   inspect_video_range: 'Inspect the footage',
   inspect_cut_context: 'Check scene and dialogue context',
   inspect_construction_join_audio: 'Measure the edited join audio',
+  scan_construction_events: 'Index footage for possible events',
+  review_discovered_event: 'Review discovered footage event',
   inspect_construction_audio: 'Listen to selected audio via Gemini',
   record_construction_audio_observation: 'Record the sound interpretation',
   begin_construction_repair: 'Plan corrections to the edit',
