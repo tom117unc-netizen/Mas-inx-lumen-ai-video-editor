@@ -4,6 +4,7 @@
 import { z } from 'zod'
 import type { Project } from './types'
 import type { JoinAudioReport } from './construction-join-audio'
+import type { EventSignal } from './construction-event-index'
 import { projectFingerprint } from './anime-review-approval'
 
 const frame = z.number().int().nonnegative()
@@ -23,6 +24,12 @@ export type StoryBeat = z.infer<typeof beatSchema>
 export type ConstructionCut = z.infer<typeof cutSchema>
 export interface InspectionReceipt extends FrameRange {id:string;frames:number[];audio:boolean;transcript:boolean}
 export interface ContextInspectionReceipt {cutId:string;storySignature:string}
+export interface DiscoveryScan extends FrameRange {id:string;fingerprint:string;visualFrames:number[];audioMeasured:boolean;transcriptLines:number;eventCount:number}
+export interface DiscoveryEvent extends FrameRange {
+  id:string;scanId:string;signal:EventSignal;strength:number;description:string;
+  visualFrames:number[];transcriptClipIds:string[];sourceClipIds:string[];
+  decision?:'keep'|'discard'|'uncertain';decisionReason?:string;inspectionIds?:string[];
+}
 export interface ConstructionAudioSample {id:string;start:number;end:number;fingerprint:string;purpose:string}
 export interface ConstructionAudioObservation {id:string;sampleId:string;eventType:'speech_delivery'|'laughter'|'game_sound'|'music'|'silence'|'uncertain';summary:string;audibleCues:string;confidence:'low'|'medium'|'high';uncertainty:string}
 export interface ConstructionJoinAudioCheck {frame:number;fingerprint:string;report:JoinAudioReport|null}
@@ -31,6 +38,8 @@ export interface ConstructionState {
   version:1; paused?:boolean; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
   coverage:z.infer<typeof coverageSchema>[];beats:StoryBeat[];cuts:ConstructionCut[];inspections:InspectionReceipt[];
   contextInspections?:ContextInspectionReceipt[];
+  discoveryScans?:DiscoveryScan[];
+  discoveryEvents?:DiscoveryEvent[];
   audioSamples?:ConstructionAudioSample[];
   audioObservations?:ConstructionAudioObservation[];
   joinAudioChecks?:ConstructionJoinAudioCheck[];
@@ -78,10 +87,19 @@ export function beginConstruction(p:Project,goal:string):ConstructionState {
   const scope=mergeRanges(Object.values(p.clips).map(c=>({start:c.start,end:c.start+c.duration})))
   if(!scope.length) throw new Error('Put the permitted footage on the timeline first.')
   scope.forEach(r=>range.parse(r))
-  return {version:1,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[]}
+  return {version:1,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
 }
 function assertFresh(p:Project,s:ConstructionState) {
   if(s.projectId!==p.id || s.sequenceId!==(p.sequence?.id??'main') || (s.applied?.fingerprint??s.fingerprint)!==constructionFingerprint(p)) throw new Error('Timeline changed: construction is stale. Re-map the current timeline before editing.')
+}
+export function unscannedDiscoveryRanges(s:ConstructionState):FrameRange[] {
+  let holes=s.scope.map(r=>({...r}))
+  for(const scan of mergeRanges(s.discoveryScans??[]))
+    holes=holes.flatMap(h=>!overlap(scan,h)?[h]:[
+      ...(h.start<scan.start?[{start:h.start,end:scan.start}]:[]),
+      ...(h.end>scan.end?[{start:scan.end,end:h.end}]:[]),
+    ])
+  return holes
 }
 export function uncoveredRanges(s:ConstructionState) {
   let holes=s.scope.map(r=>({...r}))
@@ -125,6 +143,22 @@ function validateRecords(s:ConstructionState) {
     if(!inside(c,mergeRanges(receipts.filter(i=>i.audio && i.frames.length).map(i=>({start:i.start,end:i.end}))))) throw new Error('Inspection must cover the range with both visual frames and audio analysis')
   }
   if(s.contextInspections!==undefined) z.array(z.object({cutId:id,storySignature:id})).max(1000).parse(s.contextInspections)
+  if(s.discoveryScans?.length) {
+    if(s.discoveryScans.length>3000)throw new Error('Discovery scan limit reached')
+    for(const scan of s.discoveryScans) {
+      range.parse(scan)
+      if(!inside(scan,s.scope)||scan.fingerprint!==s.fingerprint)throw new Error('Stale or out-of-scope discovery scan')
+    }
+  }
+  if(s.discoveryEvents?.length) {
+    if(s.discoveryEvents.length>10000)throw new Error('Discovery event limit reached')
+    const scans=new Set((s.discoveryScans??[]).map(x=>x.id))
+    if(new Set(s.discoveryEvents.map(e=>e.id)).size!==s.discoveryEvents.length)throw new Error('Duplicate event ID')
+    for(const event of s.discoveryEvents) {
+      range.parse(event)
+      if(!inside(event,s.scope)||!scans.has(event.scanId))throw new Error('Discovery event lacks a valid source scan')
+    }
+  }
   const sorted=[...s.cuts].sort((a,b)=>a.start-b.start)
   for(let i=1;i<sorted.length;i++) if(overlap(sorted[i-1],sorted[i])) throw new Error('Overlapping cuts')
 }
@@ -139,10 +173,17 @@ export function validateConstructionCuts(p:Project,s:ConstructionState):Construc
   if(s.paused) throw new Error('Construction is paused; resume explicitly before applying')
   validateRecords(s)
   if(uncoveredRanges(s).length) throw new Error('Investigate missing audiovisual coverage before cutting')
+  if(s.discoveryScans?.length && unscannedDiscoveryRanges(s).length)
+    throw new Error('Complete the original timeline discovery scan before cutting; candidate search is only partially indexed')
   if(!s.beats.length || !s.cuts.length) throw new Error('Map story beats and propose cuts before applying')
   if(p.tracks.some(t=>t.locked && Object.values(p.clips).some(c=>c.trackId===t.id))) throw new Error('Locked tracks could lose sync during ripple cuts; resolve them first')
   if(s.cuts.reduce((n,c)=>n+c.end-c.start,0)>=s.scope.reduce((n,r)=>n+r.end-r.start,0)) throw new Error('Cannot remove the entire video')
   for(const c of s.cuts) {
+    for(const event of s.discoveryEvents??[]) {
+      if(event.decision==='discard'||!overlap(event,c))continue
+      if(event.decision==='keep')throw new Error(`Cut damages an explicitly protected discovery event ${event.id}: ${event.description}`)
+      throw new Error(`Cut intersects unresolved discovery event ${event.id} (${event.signal}); inspect the actual audiovisual moment before deciding`)
+    }
     if(!s.beats.some(b=>b.id===c.beatId && inside(c,[b]))) throw new Error('Cut must belong to its containing scene or chapter')
     for(const b of s.beats) {
       if(b.protectedRanges.some(r=>overlap(r,c))) throw new Error(`Cut damages protected moment: ${b.summary}`)
@@ -169,6 +210,8 @@ export function constructionStatus(p:Project,s:ConstructionState) {
     const complete=!!review && review.fingerprint===s.applied.fingerprint && !review.issues.length && s.applied.joins.every(j=>review.joins.includes(j))
     return {stage:complete?'complete':'review',complete,uncovered:[],next:complete?'Finished editorial checks':'Inspect edited join frames and rendered join audio, then review story and pacing across the whole output'}
   }
+  const unscanned=s.discoveryScans?.length?unscannedDiscoveryRanges(s):[]
+  if(unscanned.length)return {stage:'discover',complete:false,uncovered:unscanned,next:'Finish indexing the original timeline event candidates before proposing removals'}
   const uncovered=uncoveredRanges(s)
   return {stage:uncovered.length?'investigate':s.beats.length?'refine':'map',complete:false,uncovered,next:uncovered.length?'Inspect uncovered timeline ranges with audio and pictures':s.beats.length?'Refine scene cuts, call inspect_cut_context for each cut, inspect neighbouring frames and validate dialogue boundaries':'Map chapters, scenes, setups, payoffs and their dependencies'}
 }
