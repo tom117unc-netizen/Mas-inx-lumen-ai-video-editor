@@ -31,8 +31,9 @@ function fixture():ConstructionState {
     ],
     inspections:[{id:'output-overview',start:0,end:145,audio:true,
       frames:[16,42,118,132],transcript:true,mode:'overview'},
-      ...[16,42,118,132].map(frame=>({id:'focused-'+frame,start:frame-1,end:frame+2,
-        audio:true,frames:[frame-1,frame,frame+1],transcript:true,mode:'focused'}))],
+      ...[[15,20,16],[40,45,42],[115,125,118],[130,135,132]].map(([start,end,frame])=>({
+        id:'focused-'+frame,start,end,audio:true,frames:Array.from({length:end-start},(_,i)=>start+i),
+        transcript:true,mode:'focused'}))],
   }
   return s as unknown as ConstructionState
 }
