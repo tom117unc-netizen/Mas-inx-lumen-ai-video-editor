@@ -1,8 +1,9 @@
 /** A stateful editorial workflow over the existing frame-based editor. */
 import { z } from 'zod'
-import { beginConstruction, constructionFingerprint, constructionStatus, mergeRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
+import { beginConstruction, constructionFingerprint, constructionStatus, constructionStorySignature, mergeRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript } from '@/editor/smart'
+import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext } from '@/editor/construction-context'
 import { assessVideoQuality, defaultVideoBrief } from '@/editor/video-quality'
 import { timelineStills, canvasBase64 } from '@/engine/stills'
 import { saveProject, useSession } from '@/project/session'
@@ -63,7 +64,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const s=state(false),offset=z.number().int().min(0).parse(a.offset??0),limit=z.number().int().min(1).max(100).parse(a.limit??40)
       const page=<T>(items:T[])=>({total:items.length,items:items.slice(offset,offset+limit),next_offset:offset+limit<items.length?offset+limit:null})
       const status=constructionStatus(getProject(),s)
-      return {goal:s.goal,fps:s.fps,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),applied:s.applied,review:s.review}
+      return {goal:s.goal,fps:s.fps,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),applied:s.applied,review:s.review}
     },
   },
   {
@@ -111,6 +112,28 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     },
   },
   {
+    name:'inspect_cut_context',
+    description:'Before accepting an exact removal, retrieve its containing scene, earlier setups, later dependent callbacks, nearby story beats, and the actual timeline transcript on both sides. Saves a context-read receipt tied to the current story map and cut coordinates; never proves that unseen/silent events are unimportant. If speech intersects a boundary, refine the cut and inspect again.',
+    inputSchema:obj({cut_id:str('ID of an already proposed cut'),context_seconds:int('Seconds of transcript before/after the cut, default 12, max 60',{minimum:1,maximum:60})},['cut_id']),
+    run:async a=>{
+      const s=state(),p=getProject(),fingerprint=constructionFingerprint(p)
+      if(s.applied) throw new Error('The plan is already applied; review edited joins instead')
+      const cutId=z.string().trim().min(1).max(128).parse(a.cut_id)
+      const contextSeconds=z.number().int().min(1).max(60).parse(a.context_seconds??12)
+      const story=relatedStoryContext(s,cutId)
+      const speech=speechCutContext(p,story.cut,contextSeconds)
+      const storySignature=constructionStorySignature(s)
+      if(constructionFingerprint(getProject())!==fingerprint || getProject().construction!==s) throw new Error('Project or story map changed during context retrieval; retry')
+      if(speech.violations.length) return {story,speech,recorded:false,safe_to_apply:false,next:'Speech crosses a proposed boundary. Refine the frames, inspect actual audio and retrieve context again.'}
+      const next=structuredClone(s)
+      next.contextInspections=[...(next.contextInspections??[]).filter(r=>r.cutId!==cutId),{cutId,storySignature}]
+      await persist(next)
+      return {story,speech,recorded:true,safe_to_apply:'No transcribed phrase crosses an edge; untranscribed speech or sounds are still unverified',
+        recommended_inspection_ranges:[story.focus,...story.dependencies,...story.related].map(b=>({beat_id:b.id,start_frame:b.start,end_frame:b.end})).slice(0,80),
+        note:'This receipt certifies context was retrieved, not that a model understood every setup, joke or reaction. Inspect relevant audio and video, refine protected moments and make a deliberate editorial judgement.'}
+    },
+  },
+  {
     name:'next_event_probe',
     description:'Plan a frame-exact bisection probe for a single bracketed visual state change. First inspect both endpoints. Use only when the interval has one change; for repeats or unknown behaviour scan shorter windows instead. It plans the next frame and does not observe the event itself.',
     inputSchema:obj({left_frame:frame,right_frame:frame,left_present:bool('Observed state at left'),right_present:bool('Observed state at right'),single_change:bool('The inspected interval supports one change, not repeated appearances')},['left_frame','right_frame','left_present','right_present','single_change']),
@@ -122,6 +145,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     inputSchema:obj({preview:bool('Validate without applying; default false')}),
     run:async a=>{
       const s=state(),p=getProject(),cuts=validateConstructionCuts(p,s)
+      assertSpeechSafeCuts(p,cuts)
       if(a.preview===true) return {valid:true,cuts,applied:false}
       const joins:number[]=[];let removed=0
       for(const c of [...cuts].reverse()) {joins.push(c.start-removed);removed+=c.end-c.start}
