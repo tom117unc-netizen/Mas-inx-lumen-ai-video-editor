@@ -133,6 +133,9 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       if((s.audioSamples?.length??0)>=300)throw new Error('Audio sample receipt budget reached')
       await prepareAudio(p)
       const mix=await renderMix(p,start/p.settings.fps,end/p.settings.fps,{sampleRate:24000})
+      const expected=(end-start)/p.settings.fps
+      if(Math.abs(mix.duration-expected)>Math.max(.001,2/mix.sampleRate))
+        throw new Error('Rendered audio length does not match the requested timeline interval; do not attach misleading timestamps')
       const wav=encodeWav(mix),data=base64Bytes(wav)
       if(data.length>4_000_000)throw new Error('Audio exceeds maximum inline payload; use a shorter range')
       if(constructionFingerprint(getProject())!==fingerprint||getProject().construction!==s)
@@ -142,7 +145,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       await persist(next)
       return withAudio({audio_sample_id:sample.id,start_frame:start,end_frame:end,
         start_seconds:start/p.settings.fps,end_seconds:end/p.settings.fps,purpose,
-        audio_format:'audio/wav',sample_rate:mix.sampleRate,channels:mix.numberOfChannels,
+        audio_format:'audio/wav',audio_seconds:mix.duration,sample_rate:mix.sampleRate,channels:mix.numberOfChannels,
         transcript:timelineTranscript(p,start/p.settings.fps,end/p.settings.fps).slice(0,80),
         limitation:'The WAV carries real rendered audio, but this tool does not itself interpret it. Only an audio-capable receiving model can hear it. Audio cues, laughter, emotion and meaning still require cautious interpretation.'},
         {data,mimeType:'audio/wav'})
