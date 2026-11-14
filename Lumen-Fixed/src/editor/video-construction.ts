@@ -113,7 +113,7 @@ export function assertDiscoveryDecisionEvidence(
   const relevant=s.inspections.filter(i=>ids.has(i.id) && i.audio && i.frames.length)
   if(!relevant.some(i=>i.start<=event.start&&i.end>=event.end) &&
      !mergeRanges(relevant).some(r=>r.start<=event.start&&r.end>=event.end))
-    throw new Error(`Inspect the entire candidate interval ${event.id} before assigning an editorial decision`)
+    throw new Error(`Missing complete audiovisual inspection of candidate ${event.id}; inspect the whole interval before deciding`)
   if(decision!=='discard')return
   const focused=relevant.filter(i=>i.mode==='focused'||i.mode==='boundary')
   if(!mergeRanges(focused).some(r=>r.start<=event.start&&r.end>=event.end))
