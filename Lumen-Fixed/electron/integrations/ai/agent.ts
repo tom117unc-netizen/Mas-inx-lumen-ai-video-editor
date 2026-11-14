@@ -167,6 +167,7 @@ function buildTools(
   modes: () => { native: boolean; vision: boolean },
   getAnalyse?: AgentVisualAnalyserFactory,
   onToolExecution?: (toolName:string)=>void,
+  onEditorOperation?: (operation:Promise<unknown>)=>void,
 ): ToolSet {
   const tools: ToolSet = {}
   for (const def of defs) {
@@ -175,7 +176,9 @@ function buildTools(
       inputSchema: jsonSchema(cleanSchema(def.inputSchema)),
       execute: async (input, { toolCallId }): Promise<ToolOutput> => {
         onToolExecution?.(def.name)
-        const res = await callEditorTool(def.name, (input ?? {}) as Record<string, unknown>)
+        const pending=callEditorTool(def.name, (input ?? {}) as Record<string, unknown>)
+        onEditorOperation?.(pending)
+        const res = await pending
         const text = res.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n')
         if (res.isError) throw new Error(text || 'The tool failed.')
         const pics = res.content.flatMap((c) => (c.type === 'image' ? [{ data: c.data, mimeType: c.mimeType }] : []))
@@ -242,6 +245,7 @@ async function runModel(req: AgentRunRequest) {
     const audioSupported=canReceiveTimelineAudio(provider,modelId)
     let constructionActive=false
     let anyEditorToolExecuted=false
+    const inFlightEditorOperations=new Set<Promise<unknown>>()
     const visionCache = new VisionEvidenceCache()
     let activeBatchSignal:AbortSignal=controller.signal
     let analyserPromise: Promise<AgentVisualAnalyser | undefined> | undefined
@@ -279,7 +283,11 @@ async function runModel(req: AgentRunRequest) {
       return analyserPromise
     }
     const tools = buildTools(await editorTools(), pictures,audioSamples,audioSupported, () => ({ native, vision }), getAnalyse,
-      name=>{anyEditorToolExecuted=true;if(isConstructionExecutionTool(name))constructionActive=true})
+      name=>{anyEditorToolExecuted=true;if(isConstructionExecutionTool(name))constructionActive=true},
+      pending=>{
+        inFlightEditorOperations.add(pending)
+        void pending.then(()=>inFlightEditorOperations.delete(pending),()=>inFlightEditorOperations.delete(pending))
+      })
 
     const stored = historyOf(req.conversationId)
     const history = native ? stripReasoning(stored) : stored
@@ -411,6 +419,12 @@ async function runModel(req: AgentRunRequest) {
           carried = carry([...carried, ...completed])
           emit({ type: 'status', message: 'This model doesn’t take that effort setting — carrying on with its default.' })
           continue
+        }
+        // A remote timeout does not necessarily cancel an IPC editor operation.
+        // Never run another task concurrently with an unconfirmed pending edit:
+        // it could produce a duplicate or race the persisted checkpoint.
+        if(inFlightEditorOperations.size && isTransientConstructionError(err,deadline.signal.aborted)) {
+          throw new Error('AI request was interrupted while an editor operation is still pending. Automatic retry is paused to avoid duplicate edits. Check the saved construction status and explicitly resume after the operation settles.')
         }
         // Before the first editor operation, retrying a failed initial provider
         // request is safe: there is no tool side effect to repeat.
