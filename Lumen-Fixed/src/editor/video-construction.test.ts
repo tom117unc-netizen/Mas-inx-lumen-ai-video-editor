@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createEmptyProject } from './new-project'
 import { createClip } from './defaults'
-import { beginConstruction, constructionStatus, updateConstruction, validateConstructionCuts, nextEventProbe } from './video-construction'
+import { beginConstruction, constructionStatus, constructionStorySignature, updateConstruction, validateConstructionCuts, nextEventProbe } from './video-construction'
 
 function fixture() {
   const p = createEmptyProject('Stream')
@@ -16,7 +16,9 @@ const cut = {id:'cut',start:100,end:200,reason:'Repetitive walking',beatId:'scen
 function ready() {
   const p=fixture(); const s=beginConstruction(p,'Funny coherent stream edit')
   s.inspections.push(receipt)
-  return {p,s:updateConstruction(s,{coverage:[coverage],beats:[beat('scene',0,600)],cuts:[cut]})}
+  const next=updateConstruction(s,{coverage:[coverage],beats:[beat('scene',0,600)],cuts:[cut]})
+  next.contextInspections=[{cutId:'cut',storySignature:constructionStorySignature(next)}]
+  return {p,s:next}
 }
 describe('construction gates',()=>{
   it('starts with unknown coverage, survives JSON and directs investigation',()=>{
@@ -46,7 +48,7 @@ describe('construction gates',()=>{
     expect(()=>updateConstruction(s,{beats:[beat('a',0,300,['b']),beat('b',300,600,['a'])]})).toThrow(/cycl/i)
   })
   it('rejects stale timelines but ignores construction metadata itself',()=>{
-    const {p,s}=ready(); s.inspections.push({id:'edges',start:99,end:202,frames:[99,100,101,199,200,201],audio:true,transcript:true}); s.cuts[0].evidenceIds.push('edges'); p.construction=s
+    const {p,s}=ready(); s.inspections.push({id:'edges',start:99,end:202,frames:[99,100,101,199,200,201],audio:true,transcript:true}); s.cuts[0].evidenceIds.push('edges'); s.contextInspections=[{cutId:'cut',storySignature:constructionStorySignature(s)}]; p.construction=s
     expect(validateConstructionCuts(p,s)).toHaveLength(1)
     Object.values(p.clips)[0].duration--
     expect(()=>validateConstructionCuts(p,s)).toThrow(/changed|stale/i)
@@ -62,7 +64,18 @@ describe('construction gates',()=>{
     expect(()=>validateConstructionCuts(p,s)).toThrow(/boundary|adjacent/i)
     s.inspections.push({id:'edges',start:99,end:202,frames:[99,100,101,199,200,201],audio:true,transcript:true})
     s.cuts[0].evidenceIds.push('edges')
+    s.contextInspections=[{cutId:'cut',storySignature:constructionStorySignature(s)}]
     expect(validateConstructionCuts(p,s)[0]).toMatchObject({start:100,end:200})
+  })
+  it('requires a context read tied to the current cut and story map',()=>{
+    const {p,s}=ready()
+    s.inspections.push({id:'edges',start:99,end:202,frames:[99,100,101,199,200,201],audio:true,transcript:true})
+    s.cuts[0].evidenceIds.push('edges')
+    expect(()=>validateConstructionCuts(p,s)).toThrow(/context/i)
+    s.contextInspections=[{cutId:'cut',storySignature:constructionStorySignature(s)}]
+    expect(validateConstructionCuts(p,s)).toHaveLength(1)
+    s.beats[0].summary='Different meaning after inspection'
+    expect(()=>validateConstructionCuts(p,s)).toThrow(/context/i)
   })
   it('does not call a merely applied edit complete',()=>{
     const {p,s}=ready(); s.applied={fingerprint:s.fingerprint,joins:[100]}
