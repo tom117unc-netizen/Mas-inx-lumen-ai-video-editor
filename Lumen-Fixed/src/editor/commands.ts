@@ -1474,7 +1474,7 @@ export const commands = {
         sequenceId:output.sequence.id,
         sourceSequenceId:updated.sourceManifest!.sequenceId,
         sourceFingerprint:updated.fingerprint,
-        selections:output.selections,clips:output.clips,outputFrames:output.outputFrames,
+        selections:output.selections,clips:output.clips,moments:output.moments,outputFrames:output.outputFrames,
       }
       updated.applied={fingerprint:'',joins:output.joins}
       updated.sourceInspections=structuredClone(updated.inspections)
