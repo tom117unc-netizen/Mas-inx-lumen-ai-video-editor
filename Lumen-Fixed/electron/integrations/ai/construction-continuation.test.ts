@@ -9,6 +9,8 @@ it('continues incomplete work only while it makes bounded progress',async()=>{
  expect(constructionContinuation({...snapshot,revision:2},1,first.progress).continue).toBe(true) // Revised decisions count as progress even when item counts stay fixed.
  expect(constructionContinuation({...snapshot,contextInspections:{total:1}},1,first.progress).continue).toBe(true)
  expect(constructionContinuation({...snapshot,status:{stage:'discover',complete:false},discoveryScans:{total:1},discoveryEvents:{total:4},discoveryPending:4},1,first.progress).continue).toBe(true)
+ expect(constructionContinuation({...snapshot,status:{stage:'context-bank',complete:false},sectionPlan:{pending_context:2,pending_editing:5}},1,first.progress).continue).toBe(true)
+ expect(constructionContinuation({...snapshot,status:{stage:'refine',complete:false},sectionPlan:{pending_context:0,pending_editing:4}},1,first.progress).continue).toBe(true)
  expect(constructionContinuation({...snapshot,status:{stage:'discover',complete:false},discoveryScans:{total:1},discoveryEvents:{total:4},discoveryPending:3},1,first.progress).continue).toBe(true)
  expect(constructionContinuation({...snapshot,joinAudioChecks:{total:1}},1,first.progress).continue).toBe(true)
  expect(constructionContinuation({...snapshot,audioObservations:{total:1}},1,first.progress).continue).toBe(true)
