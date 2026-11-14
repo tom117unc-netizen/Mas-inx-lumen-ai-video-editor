@@ -92,6 +92,45 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     },
   },
   {
+    name:'get_construction_checkpoint',
+    description:'LIGHTWEIGHT durable video-construction checkpoint for autonomous continuation. Fetch this FIRST instead of the much larger get_video_construction ledger. Gives saved stage, remaining jobs, and only the next task. Query full records with get_video_construction only when needed.',
+    inputSchema:obj({}),
+    run:async()=>{
+      const s=state(false),p=getProject(),status=constructionStatus(p,s)
+      const pending=s.sections?.context.find(x=>!x.indexed)
+      const sectionReceipts=pending?s.inspections.filter(i=>i.audio&&i.frames.length&&i.start<pending.end&&i.end>pending.start):[]
+      const probe=pending?nextContextInspectionProbe(pending,sectionReceipts,Math.round(s.fps*60)):null
+      const edit=s.sections?.editing.find(x=>!x.planned)
+      const pageCount=(list:unknown[]|undefined)=>({total:list?.length??0})
+      return {
+        goal:s.goal,revision:s.revision??0,fps:s.fps,
+        status:{...status,uncovered:status.uncovered.slice(0,3),uncovered_count:status.uncovered.length},
+        indexing:constructionIndexProgress(s),
+        missing_timeline_transcripts:missingTimelineTranscripts(p).slice(0,5),
+        next_context_section:pending?{id:pending.id,start:pending.start,end:pending.end}:null,
+        next_context_probe:probe?{section_id:pending!.id,...probe}:null,
+        next_context_inspection_ids:sectionReceipts.map(i=>i.id).slice(0,64),
+        next_edit_section:edit?{id:edit.id,start:edit.start,end:edit.end}:null,
+        sectionPlan:s.sections?{context_target_frames:s.sections.contextTargetFrames,
+          edit_target_frames:s.sections.editTargetFrames,
+          pending_context:s.sections.context.filter(x=>!x.indexed).length,
+          pending_editing:s.sections.editing.filter(x=>!x.planned).length}:null,
+        discoveryScans:pageCount(s.discoveryScans),
+        discoveryEvents:pageCount(s.discoveryEvents),
+        eventFindings:pageCount(s.eventFindings),
+        discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,
+        inspections:pageCount(s.inspections),contextInspections:pageCount(s.contextInspections),
+        beats:pageCount(s.beats),cuts:pageCount(s.cuts),
+        sourceSelections:pageCount(s.sourceSelections),narrativeMoments:pageCount(s.narrativeMoments),
+        joinAudioChecks:pageCount(s.joinAudioChecks),
+        audioObservations:pageCount(s.audioObservations),
+        assembly:s.assembly?{sequence_id:s.assembly.sequenceId,output_frames:s.assembly.outputFrames}:null,
+        review:s.review?{issues:s.review.issues??[],verdict:s.review.verdict}:null,
+        repairOf:s.repairOf?{depth:s.repairOf.depth}:null,
+      }
+    },
+  },
+  {
     name:'get_video_construction',
     description:'Resume the saved editorial workflow: reports investigation gaps, layered story beats, proposed cuts, post-edit joins and completion state. Paginate records instead of relying on chat history. A stale plan must be re-mapped before applying.',
     inputSchema:obj({offset:int('Record offset, default 0',{minimum:0}),limit:int('Records per collection, default 40, max 100',{minimum:1,maximum:100})}),
