@@ -34,7 +34,7 @@ function inspected(m:MappedNarrativeMoment,receipts:InspectionReceipt[]){
   const valid=receipts.filter(r=>r.audio&&r.frames.length&&
     r.start<m.outputEnd&&r.end>m.outputStart)
   const targeted=valid.filter(r=>r.mode==='focused'||r.mode==='boundary')
-  return union(valid).some(r=>contains(r,{start:m.outputStart,end:m.outputEnd})) &&
+  return union(targeted).some(r=>contains(r,{start:m.outputStart,end:m.outputEnd})) &&
     targeted.some(r=>r.frames.some(f=>f>=m.outputStart&&f<m.outputEnd))
 }
 export function auditOutputNarrative(s:ConstructionState):OutputNarrativeAudit {
