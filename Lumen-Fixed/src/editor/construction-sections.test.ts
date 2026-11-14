@@ -33,7 +33,7 @@ describe('duration-aware context banking and local editing',()=>{
    [{start:2600,end:2601,kind:'clip-boundary',strength:1},
     {start:5300,end:5301,kind:'audio-drop',strength:1}])
   expect(p.context[0].end).toBe(2600)
-  expect(p.editing.some(x=>x.end===2600)).toBe(false) // Editing sections are shorter and keep own event context
+  expect(p.editing.some(x=>x.end===2600)).toBe(true) // Editing sections also align to a real scene edge
  })
  it('searches the entire timeline bank, but returns only relevant local or distant context',()=>{
   const sections:BankedSection[]=[
