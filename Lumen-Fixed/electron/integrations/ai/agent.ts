@@ -1,6 +1,7 @@
 import { constructionContinuation, isConstructionExecutionTool } from './construction-continuation'
+import { CONSTRUCTION_MICRO_STEPS, CONSTRUCTION_MAX_TRANSIENT_RETRIES, CONSTRUCTION_REQUEST_DEADLINE_MS, constructionRetryDelayMs, constructionTaskPrompt, isTransientConstructionError, waitForRetry } from './construction-task-chain'
 import { canReceiveTimelineAudio, validateAudioPayload } from './audio-transport'
-import { dynamicTool, generateText, isStepCount, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
+import { dynamicTool, generateText, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
 import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest } from '../../../shared/ai'
 import { IPC, type BridgeTool } from '../../../shared/integrations'
 import { callEditorTool, editorTools, editorWindow } from '../editor-rpc'
@@ -280,6 +281,7 @@ async function runModel(req: AgentRunRequest) {
     let constructionActive = false
     let constructionBatches = 0
     let constructionProgress: string | undefined
+    let transientRetries = 0
     let currentHistory = history
     let currentUser = user
     const carry = (steps: ModelMessage[]) => {
@@ -288,18 +290,26 @@ async function runModel(req: AgentRunRequest) {
     }
 
     for (;;) {
+      // A single remote/model batch is deliberately limited. An interrupted
+      // stream does not invalidate already-saved editor checkpoints.
+      const deadline=new AbortController()
+      const timer=setTimeout(()=>deadline.abort(new Error('Provider request exceeded its bounded execution window')),CONSTRUCTION_REQUEST_DEADLINE_MS)
+      const requestSignal=AbortSignal.any([controller.signal,deadline.signal])
       try {
         const effortOpts = effortSettings(api, effort)
         const result = streamText({
           model,
           system: req.instructions ? `${COPILOT_INSTRUCTIONS}\n\n${req.instructions}` : COPILOT_INSTRUCTIONS,
-          messages: [...currentHistory, currentUser, ...carried],
+          // The full chat is retained on disk, but construction micro-steps
+          // rebuild their working context from persistent editor state. This
+          // avoids sending an ever-growing transcript to every short call.
+          messages: [...(constructionActive && constructionBatches>0 ? [] : currentHistory), currentUser, ...carried],
           tools,
           headers,
           ...effortOpts,
           providerOptions: mergeOptions(effortOpts.providerOptions, thinkingOptions(api, modelId)) as ProviderOptions,
-          stopWhen: isStepCount(MAX_STEPS),
-          abortSignal: controller.signal,
+          stopWhen: ({ steps }) => steps.length >= (constructionActive ? CONSTRUCTION_MICRO_STEPS : MAX_STEPS),
+          abortSignal: requestSignal,
           prepareStep: ({ messages, responseMessages }) => {
             completed = responseMessages as ModelMessage[]
             if (native || (!vision && !audioSupported)) return undefined
@@ -340,14 +350,15 @@ async function runModel(req: AgentRunRequest) {
         const next = trim(forHistory([...currentHistory, currentUser, ...carried, ...steps]))
         histories.set(req.conversationId, next)
         writeHistory(req.conversationId, next)
+        transientRetries=0
         if (constructionActive) {
-          const report = await callEditorTool('get_video_construction', { limit: 1 })
+          const report = await callEditorTool('get_video_construction', { limit: 5 })
           const decision = constructionContinuation(report.isError ? null : report.structuredContent, constructionBatches, constructionProgress)
           if (decision.continue && !controller.signal.aborted) {
             constructionBatches++
             constructionProgress = decision.progress
             currentHistory = next
-            currentUser = { role: 'user', content: decision.reason }
+            currentUser = { role: 'user', content: constructionTaskPrompt(report.structuredContent) }
             carried = []
             completed = []
             emit({ type: 'status', message: `Continuing saved video construction (batch ${constructionBatches + 1}).` })
@@ -378,7 +389,30 @@ async function runModel(req: AgentRunRequest) {
           emit({ type: 'status', message: 'This model doesn’t take that effort setting — carrying on with its default.' })
           continue
         }
+        if(constructionActive && transientRetries<CONSTRUCTION_MAX_TRANSIENT_RETRIES &&
+           isTransientConstructionError(err,deadline.signal.aborted)) {
+          // The failed model call may already have edited and checkpointed a
+          // scene. Never replay its partial tool-call transcript: recover the
+          // saved state and request the next idempotent, bounded work unit.
+          const report=await callEditorTool('get_video_construction',{limit:5})
+          const snapshot=report.structuredContent as {status?:{stage?:string;complete?:boolean}}|undefined
+          if(!report.isError && snapshot?.status?.stage &&
+             !['stale','paused','complete'].includes(snapshot.status.stage) &&
+             !snapshot.status.complete) {
+            transientRetries++
+            const delay=constructionRetryDelayMs(transientRetries,err)
+            emit({type:'status',message:`Temporary provider interruption. Saved construction is intact; retrying a small step (${transientRetries}/${CONSTRUCTION_MAX_TRANSIENT_RETRIES}).`})
+            await waitForRetry(delay,controller.signal)
+            currentUser={role:'user',content:constructionTaskPrompt(report.structuredContent,
+              deadline.signal.aborted?'The previous short provider call hit its deadline':'The previous short provider call was interrupted')}
+            carried=[]
+            completed=[]
+            continue
+          }
+        }
         throw err
+      } finally {
+        clearTimeout(timer)
       }
     }
   } catch (err) {
