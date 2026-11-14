@@ -106,3 +106,27 @@ it('ignores image-sequence transport paths added during project save and reload'
  if(p.assets.seq.source.type==='sequence') p.assets.seq.source.frameCount=301
  expect(constructionStatus(p,s).stage).toBe('stale')
 })
+
+it('blocks a proposed cut through an unreviewed discovered signal, even with ordinary cut receipts',()=>{
+ const {p,s}=ready()
+ s.inspections.push({id:'edges',start:99,end:202,frames:[99,100,101,199,200,201],audio:true,transcript:true})
+ s.cuts[0].evidenceIds.push('edges')
+ s.contextInspections=[{cutId:'cut',storySignature:constructionStorySignature(s)}]
+ s.discoveryScans=[{id:'scan-1',start:0,end:600,fingerprint:s.fingerprint,visualFrames:[0,60,120],audioMeasured:true,transcriptLines:0,eventCount:1}]
+ s.discoveryEvents=[{id:'event-1',scanId:'scan-1',signal:'visual-change',start:150,end:165,
+    strength:.8,description:'Unexamined visual change',visualFrames:[150],transcriptClipIds:[],sourceClipIds:['source-1']}]
+ expect(()=>validateConstructionCuts(p,s)).toThrow(/unresolved discovery event/)
+ s.discoveryEvents[0].decision='keep'
+ expect(()=>validateConstructionCuts(p,s)).toThrow(/protected discovery event/)
+ s.discoveryEvents[0].decision='discard'
+ expect(validateConstructionCuts(p,s)).toHaveLength(1)
+})
+it('requires full original-scope discovery if a scan has begun',()=>{
+ const {p,s}=ready()
+ s.inspections.push({id:'edges',start:99,end:202,frames:[99,100,101,199,200,201],audio:true,transcript:true})
+ s.cuts[0].evidenceIds.push('edges')
+ s.contextInspections=[{cutId:'cut',storySignature:constructionStorySignature(s)}]
+ s.discoveryScans=[{id:'partial',start:0,end:300,fingerprint:s.fingerprint,visualFrames:[0,60],audioMeasured:true,transcriptLines:0,eventCount:0}]
+ expect(constructionStatus(p,s).stage).toBe('discover')
+ expect(()=>validateConstructionCuts(p,s)).toThrow(/discovery scan/)
+})
