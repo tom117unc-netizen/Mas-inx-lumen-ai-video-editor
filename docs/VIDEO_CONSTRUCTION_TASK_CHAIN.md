@@ -27,13 +27,14 @@ A multi-hour video-editing job should not be one giant prompt or rely on a singl
 - Each model stream has a **180-second deadline**. Sidecar vision calls inherit the same active batch signal.
 - On transient HTTP statuses 408/409/425/429/5xx or recognizable connection and deadline failures, the Copilot **re-reads the durable construction state** before retrying. It does not replay incomplete tool-call transcripts.
 - At most **3 recovery retries** are attempted for an interrupted construction call, with deterministic exponentially increased backoff (more cautious for HTTP 429). API authentication failures, bad requests, invalid editor operations or stale project state do not retry.
-- An explicit user cancel aborts the current model request and any retry wait. No automatic process continues in the background after the run ends.
+- If a provider request times out while an editor tool RPC is **still pending**, automatic retry is deliberately blocked to avoid racing or duplicating a destructive edit. The project remains checkable/resumable once that operation settles; the system does not claim exact-once distributed transaction semantics.
+- An explicit user cancel aborts the current model request and any retry wait. No automatic model process continues in the background after the run ends.
 - Model tool images, audio samples and sidecar result caches are released after each completed micro-batch or when recovering from failure. Raw WAV bytes are not saved to the project.
 - The chain is **bounded**, not infinite. On model/provider failure, no progress or exhausted batch/retry budget, Lumen should report that the construction remains unfinished, identify the blocker and allow explicit resumption. A provider may still charge for an interrupted request. The saved .lumen edit and the provider's remote request are not a distributed atomic transaction.
 
 ## What this does and does not solve
 
-**Improvements:** smaller prompts, lower accumulated context, narrower work units, more regular quality and persistence checkpoints, bounded recovery instead of discarding a whole session, progress tied to actual editor state, user cancellation, lower risk of memory bloat from repeated image/audio inspection.
+**Improvements:** smaller prompts, lower accumulated context, narrower work units, more regular quality and persistence checkpoints, bounded recovery instead of discarding a whole session, progress tied to actual editor state, user cancellation, aggregated model-token totals across chained calls, and lower risk of memory bloat from repeated image/audio inspection.
 
 **Not yet solved:** unbounded many-hour orchestration without a running app, automatic restart after system crash, comprehensive long-video background indexing, semantic recognition of jokes/gameplay, independent final video criticism, and non-destructive source restoration after deletion. Those require the follow-up source-backed EDL, local worker and independent critic. The 96-batch cap is a protection against runaway model usage, not an estimate that a four- or six-hour video will definitely finish in one run.
 
