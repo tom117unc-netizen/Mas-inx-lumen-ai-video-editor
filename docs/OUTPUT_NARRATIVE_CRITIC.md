@@ -11,7 +11,7 @@ This milestone adds **an objective, skeptical output audit**. It is run automati
 ## Checks performed
 
 - Every essential event in the source-backed narrative ledger must appear in the output mapping **outside a teaser-only hook**.
-- Each required event must be covered by *post-publication* output inspection receipts with at least one inspected image inside it. Original source analysis cannot silently stand in for finished-film inspection.
+- Each required event must be covered by *post-publication* output inspection receipts and a new targeted focused/boundary visual sample inside the moment. A sparse overview alone cannot approve a required event. Original source analysis cannot silently stand in for finished-film inspection.
 - Saved frame coordinates for mapped events must agree with actual selected original source spans and exact output placement.
 - Required source-grounded rules/premise must precede essential round starts; each essential round must have a linked later outcome; every essential outcome must identify its actual round start.
 - Essential callbacks and joke payoffs need earlier source-grounded setup links in final output order; an essential finale must be in the concluding section.
