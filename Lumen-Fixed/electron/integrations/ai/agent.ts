@@ -361,6 +361,11 @@ async function runModel(req: AgentRunRequest) {
           }
         }
         const steps = (await result.responseMessages) as ModelMessage[]
+        // No raw image or WAV bytes need to survive a completed model step.
+        // Without this, multi-hour chains can retain hundreds of images in RAM.
+        pictures.clear()
+        audioSamples.clear()
+        visionCache.clear()
         const next = trim(forHistory([...currentHistory, currentUser, ...carried, ...steps]))
         histories.set(req.conversationId, next)
         writeHistory(req.conversationId, next)
@@ -417,6 +422,9 @@ async function runModel(req: AgentRunRequest) {
             const delay=constructionRetryDelayMs(transientRetries,err)
             emit({type:'status',message:`Temporary provider interruption. Saved construction is intact; retrying a small step (${transientRetries}/${CONSTRUCTION_MAX_TRANSIENT_RETRIES}).`})
             await waitForRetry(delay,controller.signal)
+            pictures.clear()
+            audioSamples.clear()
+            visionCache.clear()
             currentUser={role:'user',content:constructionTaskPrompt(report.structuredContent,
               deadline.signal.aborted?'The previous short provider call hit its deadline':'The previous short provider call was interrupted')}
             carried=[]
