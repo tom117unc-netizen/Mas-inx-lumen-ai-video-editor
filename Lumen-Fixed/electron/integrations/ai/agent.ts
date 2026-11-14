@@ -1,4 +1,5 @@
 import { constructionContinuation, isConstructionExecutionTool } from './construction-continuation'
+import { canReceiveTimelineAudio, validateAudioPayload } from './audio-transport'
 import { dynamicTool, generateText, isStepCount, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
 import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest } from '../../../shared/ai'
 import { IPC, type BridgeTool } from '../../../shared/integrations'
@@ -178,9 +179,8 @@ function buildTools(
         const audio = res.content.flatMap(c=>c.type==='audio'?[{data:c.data,mimeType:c.mimeType}]:[])
         if(audio.length) {
           if(!audioSupported) throw new Error('This selected model cannot receive timeline audio. Choose a supported Gemini audio-understanding model in Lumen to listen; audio has not been interpreted.')
-          if(audio.length>1 || audio.some(a=>a.mimeType!=='audio/wav' || a.data.length>4_000_000))
-            throw new Error('Audio evidence must be one bounded WAV sample, 3 MB or less.')
-          audioSamples.set(toolCallId,audio)
+          if(audio.length!==1)throw new Error('Audio evidence must contain exactly one WAV sample')
+          audioSamples.set(toolCallId,[validateAudioPayload(audio[0])])
         } else audioSamples.delete(toolCallId)
         const prepared = await prepareAgentToolVisualOutput({ toolText: text, pictures: pics, ...modes(), getAnalyse })
         if (prepared.pictures.length) pictures.set(toolCallId, prepared.pictures)
@@ -236,7 +236,7 @@ async function runModel(req: AgentRunRequest) {
     let effort = req.target.effort && !noEffort.has(key) ? req.target.effort : undefined
     const pictures = new Map<string, Picture[]>()
     const audioSamples = new Map<string,AudioSnippet[]>()
-    const audioSupported=provider==='gemini' && /^gemini-/.test(modelId)
+    const audioSupported=canReceiveTimelineAudio(provider,modelId)
     const visionCache = new VisionEvidenceCache()
     let analyserPromise: Promise<AgentVisualAnalyser | undefined> | undefined
     const getAnalyse: AgentVisualAnalyserFactory = () => {
