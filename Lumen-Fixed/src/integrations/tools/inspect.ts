@@ -307,7 +307,7 @@ export const INSPECT_TOOLS: AgentTool[] = [
   {
     name: 'analyze_audio',
     description:
-      'Hear the sound. Loudness in LUFS (as YouTube and Spotify measure it), the loudest 3 seconds, peak level, clipping, where there is sound and where there is silence, plus plain-language advice — for one media file (asset_id) or for the timeline mix (optionally a stretch, optionally per track to compare voice and music).',
+      'Measure signal levels, NOT semantic listening. Reports LUFS, short-term loudness, peaks, clipping, activity and silence from a media file or the timeline mix (optionally per track). These measurements cannot identify speech meaning, delivery, laughter, sound effects or whether a cut is funny; use actual audiovisual inspection and transcripts before judging.',
     inputSchema: obj({
       asset_id: str('A media id — omit to analyze the timeline mix'),
       from_seconds: num('Start of the stretch', { minimum: 0 }),
