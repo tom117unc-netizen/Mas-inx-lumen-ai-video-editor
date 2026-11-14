@@ -7,8 +7,9 @@ This upgrade adds a persistent editorial workflow to the existing Lumen Copilot.
 1. Put the footage you permit Lumen to use on the current timeline, and save the project.
 2. Ask the Copilot to construct a complete video. Include the premise, intended audience, approximate length and any essential moments. For example: “Turn this stream into a coherent 20-minute video. Establish the challenge, preserve each night's beginning and outcome, keep complete jokes and reactions, and tighten repetition inside scenes. Use only the footage already on the timeline.”
 3. The Copilot investigates the timeline, records audiovisual coverage and a hierarchy of chapters/scenes/beats, protects essential moments and dependencies, and proposes exact frame ranges to remove.
-4. Boundary inspection returns every frame in a small window as separate images. Application requires coverage and adjacent-frame evidence, validates dependencies, and applies all proposed removals in one undo step.
-5. After application, the output must be inspected again: new joins plus sampled coverage of the whole edit. Story and pacing findings are recorded separately from structural timeline checks.
+4. For every proposed cut, call `inspect_cut_context` after the story links and frame range are set. It retrieves the containing scene, earlier dependencies and later linked callbacks, nearby beats, transcript immediately before/inside/after the proposed deletion, and possible distant transcript matches on the current timeline. Investigate all relevant leads audiovisually; lexical matches are not proof of a real callback. The saved context-read receipt becomes stale if the story map or cut is revised.
+5. Boundary inspection returns every frame in a small window as separate images. Application requires coverage, fresh scene-context retrieval and adjacent-frame evidence; it rejects cuts through available transcribed phrases, validates dependencies, and applies all proposed removals in one undo step.
+6. After application, the output must be inspected again: new joins plus sampled coverage of the whole edit. Story and pacing findings are recorded separately from structural timeline checks.
 
 Ask for status to inspect progress without authorizing more edits. Ask to resume to continue. Ask to pause construction to release the AI editing safeguards without discarding the map. Manual timeline edits remain available; changed timing or media identity makes the old plan stale and requires re-mapping. Undo/redo of edits is supported, but construction metadata is retained separately and can become stale.
 
@@ -17,6 +18,7 @@ Ask for status to inspect progress without authorizing more edits. Ask to resume
 - `begin_video_construction`, `get_video_construction`, `resume_video_construction`, `pause_video_construction`
 - `inspect_video_range`: overview up to 60 seconds / 12 sampled frames; boundary up to 12 consecutive frames; separate images at 1280px by default, up to 1920px.
 - `update_video_construction`: upsert coverage, hierarchical beats, essential dependencies, protected intervals and proposed removals. All times are half-open integer timeline-frame ranges.
+- `inspect_cut_context`: return linked and nearby story context, timeline dialogue around a removal and bounded lexical clues to potential distant callbacks. Records a fresh retrieval receipt, not a quality approval. Transcript phrase boundaries that intersect a cut prevent a receipt.
 - `next_event_probe`: midpoint refinement only for a single bracketed change; not a detector and not appropriate for repeated disappearances.
 - `apply_video_construction`: validate or apply the proposed removals atomically.
 - `review_video_construction`: require output inspection, new-join checks and explicit story/pacing findings before marking the pass complete.
@@ -25,7 +27,7 @@ The compact plan and inspection receipts are stored in the `.lumen` project and 
 
 ## Limits and acceptance testing
 
-Audio evidence currently consists of transcript and measured audio properties. These tools do not supply semantic listening to laughter, sarcasm, delivery or game sounds. Uncertainty must remain explicit. Bisection does not discover an event until actual frame observations bracket it. The first construction operation is chronological removal/tightening, not automatic scene rearrangement or a new effects system.
+Speech-boundary validation blocks a cut through any available timed transcript phrase, including when a transcript arrives after context inspection; absent or incorrect transcripts cannot be interpreted as safe silence. Audio evidence currently consists of transcript and measured audio properties. These tools do not supply semantic listening to laughter, sarcasm, delivery or game sounds. Uncertainty must remain explicit. Bisection does not discover an event until actual frame observations bracket it. The first construction operation is chronological removal/tightening, not automatic scene rearrangement or a new effects system.
 
 Cloud runs allow up to twelve additional 24-step batches, stop when the recorded progress stops changing, and report unfinished work rather than equating a budget limit with completion. A saved plan can be resumed. Use the installed provider's normal usage/cost controls.
 
