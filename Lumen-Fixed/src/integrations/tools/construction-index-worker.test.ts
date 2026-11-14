@@ -1,7 +1,7 @@
 import {afterEach,describe,expect,it} from 'vitest'
 import {createEmptyProject} from '@/editor/new-project'
 import {createClip} from '@/editor/defaults'
-import {beginConstruction, type ConstructionState} from '@/editor/video-construction'
+import {beginConstruction} from '@/editor/video-construction'
 import {getProject, recordVideoConstruction, useEditor} from '@/editor/store'
 import {clearFinishedConstructionIndexJob,constructionIndexProgress,indexCoverage,nextIndexChunk,pauseConstructionIndexJob,startConstructionIndexJob} from './construction-index-worker'
 
