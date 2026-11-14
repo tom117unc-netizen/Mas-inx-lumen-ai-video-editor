@@ -9,6 +9,7 @@ function story() {
   const clip = createClip({kind:'video',trackId:p.tracks[0].id,start:0,duration:600})
   p.clips[clip.id] = clip
   const started = beginConstruction(p,'Protect setups and later callbacks')
+  started.inspections.push({id:'receipt',start:0,end:600,frames:[0,100,200,300,400,500],audio:true,transcript:true})
   const s = updateConstruction(started,{beats:[
     {id:'intro',start:0,end:100,kind:'setup',summary:'Find the cursed key'},
     {id:'middle',start:100,end:300,kind:'scene',summary:'Long journey',dependsOn:['intro']},
