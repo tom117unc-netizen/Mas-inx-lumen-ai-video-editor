@@ -5,16 +5,21 @@ import {
 } from './construction-task-chain'
 
 describe('bounded persistent video-construction call chains',()=>{
- it('chooses exactly one 60-second bounded scan from the saved original timeline gap',()=>{
+ it('launches one resumable whole-video indexer rather than making an AI call for every minute',()=>{
   const prompt=constructionTaskPrompt({goal:'Edit the YapYap recording into a complete, funny video',
     fps:30,revision:6,status:{stage:'discover',uncovered:[{start:1800,end:9000}]},
     discoveryScans:{total:3},discoveryEvents:{total:15},discoveryPending:8})
   expect(prompt).toMatch(/\[1800, 3600\)/)
+  expect(prompt).toMatch(/start_construction_indexing/)
+  expect(prompt).toMatch(/Do NOT make a separate AI tool call for each minute/)
   expect(prompt).toMatch(/Goal: Edit the YapYap/)
   expect(prompt).toMatch(/revision=6/)
   expect(prompt).toMatch(/ONLY|Only the ORIGINAL authorised timeline footage/)
   expect(prompt).toMatch(/persist a durable checkpoint/)
   expect(prompt).not.toMatch(/\[1800, 9000\)/)
+  const active=constructionTaskPrompt({status:{stage:'discover'},indexing:{state:'running',percent:48}})
+  expect(active).toMatch(/already running/)
+  expect(active).not.toMatch(/Start the one-call/)
  })
  it('requires one transcription job before any scan when source speech metadata is missing',()=>{
   const prompt=constructionTaskPrompt({status:{stage:'discover',uncovered:[{start:0,end:1800}]},
@@ -57,6 +62,8 @@ describe('bounded persistent video-construction call chains',()=>{
  it('chooses one review candidate rather than making broad deletion assumptions',()=>{
   expect(constructionTaskPrompt({status:{stage:'refine'},discoveryPending:4}))
     .toMatch(/get_discovery_queue/)
+  expect(constructionTaskPrompt({status:{stage:'refine'},discoveryPending:4}))
+    .toMatch(/record_construction_event_findings/)
   expect(constructionTaskPrompt({status:{stage:'review'}}))
     .toMatch(/ONE unfinished edited join/)
   expect(constructionTaskPrompt({status:{stage:'review'},review:{issues:['Missing opening rules']}}))
