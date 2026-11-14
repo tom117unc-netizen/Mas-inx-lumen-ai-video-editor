@@ -78,6 +78,7 @@ interface Picture {
   data: string
   mimeType: string
 }
+interface AudioSnippet {data:string;mimeType:'audio/wav'}
 
 interface ToolOutput {
   text: string
@@ -85,7 +86,7 @@ interface ToolOutput {
   delivery: 'text' | 'follow' | 'native'
 }
 
-const PICTURES_NOTE = 'The pictures from the tools you just called:'
+const PICTURES_NOTE = 'Media evidence from the tools you just called; audio must be directly interpreted before reporting sound events:'
 const FOLLOWS_NOTE = '[The picture follows in the next message.]'
 const DROPPED_NOTE = '[picture — not kept]'
 const textOnly = new Set<string>()
@@ -96,6 +97,7 @@ function isPictureMessage(m: ModelMessage) {
 }
 
 const isImageType = (mediaType: unknown) => typeof mediaType === 'string' && mediaType.startsWith('image')
+const isAudioType = (mediaType: unknown) => typeof mediaType === 'string' && mediaType.startsWith('audio/')
 
 function stripPictures(messages: ModelMessage[]): ModelMessage[] {
   return messages.map((m) => {
@@ -107,13 +109,13 @@ function stripPictures(messages: ModelMessage[]): ModelMessage[] {
           if (part.output.type === 'text') return part.output.value.includes(FOLLOWS_NOTE) ? { ...part, output: { ...part.output, value: part.output.value.replace(FOLLOWS_NOTE, DROPPED_NOTE) } } : part
           if (part.output.type !== 'content') return part
           const value = part.output.value.map((v) =>
-            (v.type === 'file' || v.type === 'image-data' || v.type === 'file-data') && isImageType(v.mediaType) ? { type: 'text' as const, text: DROPPED_NOTE } : v,
+            (v.type === 'file' || v.type === 'image-data' || v.type === 'file-data') && (isImageType(v.mediaType) || isAudioType(v.mediaType)) ? { type: 'text' as const, text: DROPPED_NOTE } : v,
           )
           return { ...part, output: { ...part.output, value } }
         }),
       }
     }
-    if (m.role === 'user' && Array.isArray(m.content) && m.content.some((c) => c.type === 'image' || (c.type === 'file' && isImageType(c.mediaType)))) {
+    if (m.role === 'user' && Array.isArray(m.content) && m.content.some((c) => c.type === 'image' || (c.type === 'file' && (isImageType(c.mediaType) || isAudioType(c.mediaType))))) {
       return { ...m, content: m.content.filter((c) => c.type === 'text') }
     }
     return m
@@ -158,6 +160,8 @@ function isEffortRejection(err: unknown) {
 function buildTools(
   defs: BridgeTool[],
   pictures: Map<string, Picture[]>,
+  audioSamples: Map<string, AudioSnippet[]>,
+  audioSupported: boolean,
   modes: () => { native: boolean; vision: boolean },
   getAnalyse?: AgentVisualAnalyserFactory,
 ): ToolSet {
@@ -171,10 +175,17 @@ function buildTools(
         const text = res.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n')
         if (res.isError) throw new Error(text || 'The tool failed.')
         const pics = res.content.flatMap((c) => (c.type === 'image' ? [{ data: c.data, mimeType: c.mimeType }] : []))
+        const audio = res.content.flatMap(c=>c.type==='audio'?[{data:c.data,mimeType:c.mimeType}]:[])
+        if(audio.length) {
+          if(!audioSupported) throw new Error('This selected model cannot receive timeline audio. Choose a supported Gemini audio-understanding model in Lumen to listen; audio has not been interpreted.')
+          if(audio.length>1 || audio.some(a=>a.mimeType!=='audio/wav' || a.data.length>4_000_000))
+            throw new Error('Audio evidence must be one bounded WAV sample, 3 MB or less.')
+          audioSamples.set(toolCallId,audio)
+        } else audioSamples.delete(toolCallId)
         const prepared = await prepareAgentToolVisualOutput({ toolText: text, pictures: pics, ...modes(), getAnalyse })
         if (prepared.pictures.length) pictures.set(toolCallId, prepared.pictures)
         else pictures.delete(toolCallId)
-        return { text: prepared.text, pictures: prepared.pictures.length, delivery: prepared.delivery }
+        return { text: audio.length?`${prepared.text}\n\n[The captured WAV is attached to the next model step; analyse its actual sound, not only the transcript.]`:prepared.text, pictures: prepared.pictures.length, delivery: prepared.delivery }
       },
       toModelOutput: ({ toolCallId, output }) => {
         const out = output as ToolOutput
@@ -191,13 +202,14 @@ function buildTools(
   return tools
 }
 
-function withPictures(messages: ModelMessage[], pictures: Map<string, Picture[]>): ModelMessage[] | undefined {
+function withMedia(messages: ModelMessage[], pictures: Map<string, Picture[]>, audioSamples:Map<string,AudioSnippet[]>): ModelMessage[] | undefined {
   const last = messages[messages.length - 1]
   if (last?.role !== 'tool') return undefined
   const pics = last.content.flatMap((part) => (part.type === 'tool-result' ? (pictures.get(part.toolCallId) ?? []) : []))
-  if (!pics.length) return undefined
+  const audio = last.content.flatMap((part) => (part.type === 'tool-result' ? (audioSamples.get(part.toolCallId) ?? []) : []))
+  if (!pics.length && !audio.length) return undefined
   const earlier = messages.map((m) => (isPictureMessage(m) ? { role: 'user' as const, content: [{ type: 'text' as const, text: '[Earlier pictures — no longer attached.]' }] } : m))
-  return [...earlier, { role: 'user', content: [{ type: 'text', text: PICTURES_NOTE }, ...pics.map((p) => ({ type: 'image' as const, image: p.data, mediaType: p.mimeType }))] }]
+  return [...earlier, { role: 'user', content: [{ type: 'text', text: PICTURES_NOTE }, ...pics.map((p) => ({ type: 'image' as const, image: p.data, mediaType: p.mimeType })), ...audio.map(a=>({type:'file' as const,data:a.data,mediaType:a.mimeType}))] }]
 }
 
 function trim(history: ModelMessage[]) {
@@ -221,6 +233,8 @@ async function runModel(req: AgentRunRequest) {
     let vision = canSee !== false && !textOnly.has(key)
     let effort = req.target.effort && !noEffort.has(key) ? req.target.effort : undefined
     const pictures = new Map<string, Picture[]>()
+    const audioSamples = new Map<string,AudioSnippet[]>()
+    const audioSupported=provider==='gemini' && /^gemini-/.test(modelId)
     const visionCache = new VisionEvidenceCache()
     let analyserPromise: Promise<AgentVisualAnalyser | undefined> | undefined
     const getAnalyse: AgentVisualAnalyserFactory = () => {
@@ -250,7 +264,7 @@ async function runModel(req: AgentRunRequest) {
       })().catch(() => undefined)
       return analyserPromise
     }
-    const tools = buildTools(await editorTools(), pictures, () => ({ native, vision }), getAnalyse)
+    const tools = buildTools(await editorTools(), pictures,audioSamples,audioSupported, () => ({ native, vision }), getAnalyse)
 
     const stored = historyOf(req.conversationId)
     const history = native ? stripReasoning(stored) : stored
@@ -286,8 +300,8 @@ async function runModel(req: AgentRunRequest) {
           abortSignal: controller.signal,
           prepareStep: ({ messages, responseMessages }) => {
             completed = responseMessages as ModelMessage[]
-            if (native || !vision) return undefined
-            const next = withPictures(messages, pictures)
+            if (native || (!vision && !audioSupported)) return undefined
+            const next = withMedia(messages, pictures,audioSamples)
             return next ? { messages: next } : undefined
           },
         })
