@@ -13,13 +13,14 @@ interface ShortRange {start:number;end:number}
 interface Snapshot {
   goal?:unknown;revision?:unknown;fps?:unknown
   status?:{stage?:unknown;complete?:unknown;uncovered?:unknown;uncovered_count?:unknown;next?:unknown}
+  indexing?:{state?:unknown;percent?:unknown;remainingFrames?:unknown;error?:unknown}
   missing_timeline_transcripts?:unknown
   next_context_section?:unknown;next_context_probe?:unknown;next_context_inspection_ids?:unknown;next_edit_section?:unknown
   sectionPlan?:{context_target_frames?:unknown;edit_target_frames?:unknown;pending_context?:unknown;pending_editing?:unknown}
   discoveryPending?:unknown
   sourceSelections?:{total?:unknown}
   beats?:{total?:unknown};cuts?:{total?:unknown}
-  discoveryScans?:{total?:unknown};discoveryEvents?:{total?:unknown}
+  discoveryScans?:{total?:unknown};discoveryEvents?:{total?:unknown};eventFindings?:{total?:unknown}
   inspections?:{total?:unknown};joinAudioChecks?:{total?:unknown}
   applied?:unknown;assembly?:{sequence_id?:unknown};review?:unknown
 }
@@ -65,8 +66,12 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   if(missing.length){
     task=`First transcribe ONE permitted audible asset lacking a transcript: ${missing[0]}. Use transcribe_media and verify the saved result before scanning; do not invent a transcript. More pending IDs: ${missing.length-1} on this status page.`
   } else if(stage==='discover'){
-    task=bounded?`Scan ONE not-yet-indexed current-timeline range [${bounded.start}, ${bounded.end}) with scan_construction_events. This scan finds search candidates only. Do not label them jokes or safe-to-cut based solely on audio levels.`
-      :'Retrieve discovery scan gaps using get_video_construction; do not guess timeline ranges.'
+    const indexState=s.indexing?.state
+    task=indexState==='running'||indexState==='pausing'
+      ?'The local media indexing job is already running; no further model/media scan calls are necessary. Return so the Copilot can wait without spending AI requests. Check get_construction_indexing only if troubleshooting is needed.'
+      :indexState==='failed'||indexState==='stale'
+      ?`The local indexing worker stopped: ${brief(s.indexing?.error,250)}. Do not claim discovery is complete; preserve the saved checkpoint and report the source-media problem.`
+      :`Start the one-call resumable LOCAL whole-timeline worker with start_construction_indexing. ${bounded?`The first remaining authorised range begins [${bounded.start}, ${bounded.end});`:''} it automatically handles every remaining original source interval, saves each completed scan and adjusts chunk sizes to actual event density. Do NOT make a separate AI tool call for each minute. Index signals only locate candidates, not game event meaning or humour.`
   } else if(stage==='context-bank'){
     task=bankRange?`GLOBAL CONTEXT BANKING PASS, before editing: work on section ${bankLabel} [${bankRange.start}, ${bankRange.end}). ${bankProbe?`Inspect only the NEXT uncovered [${bankProbe.start}, ${bankProbe.end}) with inspect_video_range (overview first; focus on important signals).`:`Inspections cover the entire section; call record_construction_context_section with the relevant existing receipts: ${bankEvidence.join(', ')||'fetch saved receipts'}.`} Consult get_source_transcript / get_source_observations for authorised assets. Bank real key moments, rule/night/round progression, distant callback leads and uncertainties. Do not start choosing deletions until the WHOLE recording is banked.`
       :'Use get_video_construction to retrieve the next unbanked context section and finish indexing the WHOLE original timeline before editing.'
@@ -77,7 +82,7 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
     task=`Build or revise ONE coherent chapter/scene group and record directly observed challenge rules, round/night transitions, joke setups/payoffs and callbacks via record_construction_narrative_moments with exact source-frame evidence, starting with ${editLabel}${editRange?` [${editRange.start}, ${editRange.end})`:''}. FIRST call get_construction_edit_context with a question about the goal, chronology and possible callbacks. Its global indexed context is available without loading the full video; query earlier and later setups whenever useful. Keep rules, round/night starts/endings, complete jokes and natural reaction tails. Save the beat map.`
   } else if(stage==='refine'){
     task=count(s.discoveryPending)>0
-      ?'Use get_discovery_queue to find a candidate potentially affected by proposed deletions. Inspect its exact range using focused frames and real audio if necessary; save a justified keep/discard/uncertain decision and any essential narrative-moment evidence. Do not discard based on a sampled overview.'
+      ?'Use get_discovery_queue and get_event_investigation_queue to find ONE narrative-relevant unresolved candidate. Inspect actual original source footage in focused frames and listen to real audio if interpretation depends on sound. Save what was directly observed or remains uncertain with record_construction_event_findings, then judge whether the event must be kept. Never discard from sparse overview.'
       :`Plan ONE local section ${editLabel}${editRange?` [${editRange.start}, ${editRange.end})`:''} using get_construction_edit_context, which searches the complete bank. Investigate distant setup/payoff links, inspect edge frames, record relevant beats/cuts, then call record_construction_edit_section with real receipts. Never treat local footage as self-contained if its humour or story requires another section. Do not apply until ALL editing sections are planned.`
   } else if(stage==='assemble'){
     task=count(s.sourceSelections?.total)
@@ -93,7 +98,7 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   return [
     'LUMEN AUTONOMOUS VIDEO CONSTRUCTION — NEXT SMALL VERIFIED STEP',
     `Goal: ${brief(s.goal,2000)||'Use the saved project goal'}`,
-    `Saved state: stage=${stage}; revision=${count(s.revision)}; fps=${fps}; context bank pending=${count(s.sectionPlan?.pending_context)}; local edit sections pending=${count(s.sectionPlan?.pending_editing)}; context target frames=${count(s.sectionPlan?.context_target_frames)}; editing target frames=${count(s.sectionPlan?.edit_target_frames)}; discovery scans=${count(s.discoveryScans?.total)}; candidates=${count(s.discoveryEvents?.total)}; pending candidates=${count(s.discoveryPending)}; beats=${count(s.beats?.total)}; proposed cuts=${count(s.cuts?.total)}; retained source selections=${count(s.sourceSelections?.total)}.`,
+    `Saved state: stage=${stage}; revision=${count(s.revision)}; fps=${fps}; context bank pending=${count(s.sectionPlan?.pending_context)}; local edit sections pending=${count(s.sectionPlan?.pending_editing)}; context target frames=${count(s.sectionPlan?.context_target_frames)}; editing target frames=${count(s.sectionPlan?.edit_target_frames)}; discovery scans=${count(s.discoveryScans?.total)}; candidates=${count(s.discoveryEvents?.total)}; interpreted=${count(s.eventFindings?.total)}; pending candidates=${count(s.discoveryPending)}; beats=${count(s.beats?.total)}; proposed cuts=${count(s.cuts?.total)}; retained source selections=${count(s.sourceSelections?.total)}.`,
     recovery?`Recovery: ${brief(recovery,250)}. The previous request may have partially executed. Re-read saved state; do NOT replay unverified edits.`:'',
     `Task: ${task}`,
     'Start with get_video_construction (limit 5) and follow its current saved status. Do only this focused work unit, persist a durable checkpoint and return a concise result. No need to solve the whole movie in this call.',
