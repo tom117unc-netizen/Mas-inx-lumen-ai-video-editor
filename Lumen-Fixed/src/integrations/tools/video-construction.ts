@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import { assertDiscoveryDecisionEvidence, beginConstruction, constructionFingerprint, constructionStatus, constructionStorySignature, mergeRanges, unscannedDiscoveryRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
 import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-event-index'
-import { planConstructionSections, selectBankContext } from '@/editor/construction-sections'
+import { nextContextInspectionProbe, planConstructionSections, selectBankContext } from '@/editor/construction-sections'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
@@ -93,8 +93,13 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const s=state(false),offset=z.number().int().min(0).parse(a.offset??0),limit=z.number().int().min(1).max(100).parse(a.limit??40)
       const page=<T>(items:T[])=>({total:items.length,items:items.slice(offset,offset+limit),next_offset:offset+limit<items.length?offset+limit:null})
       const status=constructionStatus(getProject(),s)
+      const pending=s.sections?.context.find(x=>!x.indexed)
+      const sectionReceipts=pending?s.inspections.filter(i=>i.audio&&i.frames.length&&i.start<pending.end&&i.end>pending.start):[]
+      const nextContextProbe=pending?nextContextInspectionProbe(pending,sectionReceipts,Math.round(s.fps*60)):null
       return {goal:s.goal,fps:s.fps,revision:s.revision??0,
-        next_context_section:s.sections?.context.find(x=>!x.indexed)??null,
+        next_context_section:pending??null,
+        next_context_probe:nextContextProbe?{section_id:pending!.id,...nextContextProbe}:null,
+        next_context_inspection_ids:sectionReceipts.map(i=>i.id).slice(0,64),
         next_edit_section:s.sections?.editing.find(x=>!x.planned)??null,
         sectionPlan:s.sections?{context_target_frames:s.sections.contextTargetFrames,edit_target_frames:s.sections.editTargetFrames,context:page(s.sections.context),editing:page(s.sections.editing),pending_context:s.sections.context.filter(x=>!x.indexed).length,pending_editing:s.sections.editing.filter(x=>!x.planned).length}:undefined,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
     },
@@ -124,6 +129,15 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const next=structuredClone(s)
       const target=next.sections!.context.find(x=>x.id===id)!
       target.indexed=true;target.summary=summary;target.keyMoments=moments;target.uncertainties=uncertainties;target.evidenceIds=ids
+      // Reuse the already verified inspector receipts as broad source-coverage
+      // metadata. Do NOT pretend those overviews watched every intervening frame
+      // or heard meaning: the wording explicitly retains uncertainty.
+      next.coverage=[...next.coverage.filter(c=>c.id!==`bank-coverage-${id}`),{
+        id:`bank-coverage-${id}`,start:section.start,end:section.end,
+        visual:`Sampled audiovisual overview and grounded section summary: ${summary.slice(0,1000)}`,
+        audio:`Timed transcript and measured audio (not necessarily heard semantically); uncertainties: ${uncertainties.join('; ').slice(0,900)||'No semantic listening asserted'}`,
+        evidenceIds:ids,
+      }]
       // A materially updated full-story synopsis invalidates earlier local
       // context reads and editing decisions that were based on it.
       if(section.summary!==summary || !section.indexed){
@@ -557,7 +571,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       if(depth>3) throw new Error('Three repair passes attempted; leave the project for deliberate manual assessment rather than looping forever')
       const p=getProject()
       const goal=z.string().trim().min(1).max(2000).parse(a.goal)
-      const next=beginConstruction(p,goal)
+      const next=beginConstruction(p,goal,true)
       const targeted=previous.review.joinVerdicts?.filter(v=>v.verdict==='repair').map(v=>v.frame)
       next.repairOf={fingerprint:previous.applied.fingerprint,
         targetFrames:targeted?.length ? targeted : previous.applied.joins,
