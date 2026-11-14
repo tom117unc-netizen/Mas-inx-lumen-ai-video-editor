@@ -8,6 +8,7 @@ import type { EventSignal } from './construction-event-index'
 import { planConstructionSections, type BankedSection, type PlannedSection } from './construction-sections'
 import type { ImmutableSourceManifest, SourceSelection, SourceClipMap, SelectionOutputMap } from './construction-assembler'
 import type { NarrativeMoment, MappedNarrativeMoment } from './construction-narrative'
+import type { ConstructionEventFinding } from './construction-event-findings'
 import { projectFingerprint } from './anime-review-approval'
 
 const frame = z.number().int().nonnegative()
@@ -60,6 +61,7 @@ export interface ConstructionState {
   contextInspections?:ContextInspectionReceipt[];
   discoveryScans?:DiscoveryScan[];
   discoveryEvents?:DiscoveryEvent[];
+  eventFindings?:ConstructionEventFinding[];
   audioSamples?:ConstructionAudioSample[];
   audioObservations?:ConstructionAudioObservation[];
   joinAudioChecks?:ConstructionJoinAudioCheck[];
@@ -125,7 +127,7 @@ export function beginConstruction(p:Project,goal:string,sectioned=false):Constru
     editTargetFrames:scheduled.editTargetFrames,
     context:scheduled.context,editing:scheduled.editing,reads:[],
   }:undefined
-  return {version:1,discoveryRequired:true,revision:0,sections,sourceManifest,sourceSelections:[],narrativeMoments:[],projectId:p.id,sequenceId:p.sequence?.id??'seq_main',fingerprint,goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[]}
+  return {version:1,discoveryRequired:true,revision:0,sections,sourceManifest,sourceSelections:[],narrativeMoments:[],projectId:p.id,sequenceId:p.sequence?.id??'seq_main',fingerprint,goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[],discoveryScans:[],discoveryEvents:[],eventFindings:[]}
 }
 function assertFresh(p:Project,s:ConstructionState) {
   const requiredSequence=s.assembly&&s.applied?s.assembly.sequenceId:s.sequenceId
