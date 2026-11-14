@@ -7,7 +7,8 @@ import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
 import { assessVideoQuality, defaultVideoBrief } from '@/editor/video-quality'
 import { assessJoinAudio } from '@/editor/construction-join-audio'
-import { levelFrames, prepareAudio, renderMix } from '@/engine/audio-engine'
+import { isAudible, levelFrames, prepareAudio, renderMix } from '@/engine/audio-engine'
+import { speechScript } from '@/engine/audio'
 import { encodeWav } from '@/engine/wav'
 import { timelineStills, canvasBase64 } from '@/engine/stills'
 import { contentDelta, toHsv } from '@/engine/scenes'
@@ -16,6 +17,17 @@ import { INSPECT_TOOLS } from './inspect'
 import { bool, int, list, obj, oneOf, str, withAudio, withImages, type AgentTool } from './kit'
 import { uid } from '@/lib/id'
 
+/** Sound from a video on an overlay track may also carry commentary; do not
+ * mistake a lack of a 'Voice' or 'Main' role for proof of no speech. */
+function missingTimelineTranscripts(p:ReturnType<typeof getProject>) {
+  const ids=new Set(untranscribed(p))
+  for(const c of Object.values(p.clips)) {
+    if(c.kind!=='video'||!c.assetId||!isAudible(p,c))continue
+    const asset=p.assets[c.assetId]
+    if(asset && !speechScript(asset).length)ids.add(asset.id)
+  }
+  return [...ids]
+}
 function state(fresh=true):ConstructionState {
   const p=getProject(),s=p.construction
   if(!s) throw new Error('Call begin_video_construction first')
@@ -77,7 +89,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const s=state(false),offset=z.number().int().min(0).parse(a.offset??0),limit=z.number().int().min(1).max(100).parse(a.limit??40)
       const page=<T>(items:T[])=>({total:items.length,items:items.slice(offset,offset+limit),next_offset:offset+limit<items.length?offset+limit:null})
       const status=constructionStatus(getProject(),s)
-      return {goal:s.goal,fps:s.fps,revision:s.revision??0,missing_timeline_transcripts:untranscribed(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
+      return {goal:s.goal,fps:s.fps,revision:s.revision??0,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
     },
   },
   {
@@ -137,7 +149,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       if(s.applied)throw new Error('Discovery must use the original timeline, before construction applies removals')
       if(s.paused)throw new Error('Resume construction before discovering events')
       const start=z.number().int().nonnegative().parse(a.start_frame),end=z.number().int().min(start+1).parse(a.end_frame)
-      const missing=untranscribed(p)
+      const missing=missingTimelineTranscripts(p)
       if(s.discoveryRequired && missing.length)
         throw new Error(`Cannot certify event discovery while these audible timeline assets have no transcript: ${missing.join(', ')}. Transcribe them with transcribe_media first, then scan; audio levels cannot substitute for speech evidence.`)
       const length=end-start
