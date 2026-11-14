@@ -259,3 +259,68 @@ export function validateOutputSourceMap(output:KeepFirstOutput,m:ImmutableSource
       throw new Error('Source-to-output clip mapping drifted')
   }
 }
+
+/** Deterministic post-assembly critic. It independently checks what was ACTUALLY
+ * published, not the model's claim that the output has the correct source,
+ * duration or original-clip provenance. Semantic humour still needs a real
+ * viewer/video model and must not be inferred from this objective report. */
+export function auditPublishedAssembly(p:Project,s:ConstructionState){
+ const issues:string[]=[]
+ const a=s.assembly,m=s.sourceManifest
+ if(!a||!m)return {available:false,ok:false,issues:['No published source map or original manifest is present'],checkedClips:0,outputFrames:0}
+ if(a.sequenceId!==(p.sequence?.id??'seq_main'))
+   issues.push('The open output is not the sequence described by the saved assembly map')
+ const original=p.sequences?.[a.sourceSequenceId]
+ if(!original)issues.push('The preserved original source sequence is missing')
+ else {
+  if(JSON.stringify(original.clips)!==JSON.stringify(m.clips))
+   issues.push('The preserved original source clips have changed since banking')
+  if(JSON.stringify(original.settings)!==JSON.stringify(m.settings))
+   issues.push('The preserved original project timing/resolution differs from the source manifest')
+  if(JSON.stringify(original.tracks)!==JSON.stringify(m.tracks))
+   issues.push('The preserved original track routing has changed')
+ }
+ let nextFrame=0
+ const foundSelectionIds=new Set<string>()
+ for(const region of a.selections){
+  if(foundSelectionIds.has(region.selectionId))issues.push('An assembled selection ID was duplicated')
+  foundSelectionIds.add(region.selectionId)
+  if(region.outputStart!==nextFrame)
+   issues.push(`Output gap or overlapping selection before ${region.selectionId}`)
+  if(region.outputEnd-region.outputStart!==region.sourceEnd-region.sourceStart)
+   issues.push(`Source/output duration mismatch for selection ${region.selectionId}`)
+  nextFrame=region.outputEnd
+ }
+ if(nextFrame!==a.outputFrames)
+   issues.push('Saved total output length differs from assembled selection boundaries')
+ const clips=Object.values(p.clips)
+ const known=new Set(a.clips.map(x=>x.outputClipId))
+ for(const clip of clips)if(!known.has(clip.id))
+   issues.push(`An output clip has no authorised original source map: ${clip.id}`)
+ for(const map of a.clips){
+  const source=m.clips[map.originalClipId],output=p.clips[map.outputClipId]
+  const region=a.selections.find(x=>x.selectionId===map.selectionId)
+  if(!source||!output||!region){
+    issues.push(`Missing original, output or selected region for map ${map.outputClipId}`)
+    continue
+  }
+  if(output.start!==map.outputStart||clipEnd(output)!==map.outputEnd||
+     output.inPoint!==map.outputInPoint||output.duration!==map.sourceEnd-map.sourceStart)
+    issues.push(`Output source in-point or timing differs from saved map: ${map.outputClipId}`)
+  if(output.assetId!==source.assetId||output.sequenceId!==source.sequenceId||
+     output.kind!==source.kind)
+    issues.push(`Output source identity changed: ${map.outputClipId}`)
+  if(source.trackId!==map.originalTrackId||output.trackId!==map.outputTrackId)
+    issues.push(`Track mapping drifted for output clip ${map.outputClipId}`)
+  if(map.sourceStart<region.sourceStart||map.sourceEnd>region.sourceEnd||
+     map.outputStart!==region.outputStart+map.sourceStart-region.sourceStart)
+    issues.push(`Source/output origin drift in ${map.outputClipId}`)
+  const inOriginal=source.start<=map.sourceStart&&clipEnd(source)>=map.sourceEnd
+  if(!inOriginal)issues.push(`Mapped clip uses frames outside the original source: ${map.outputClipId}`)
+ }
+ const actualEnd=clips.reduce((max,c)=>Math.max(max,clipEnd(c)),0)
+ if(actualEnd!==a.outputFrames)
+   issues.push(`Real output length (${actualEnd} frames) differs from saved assembly length (${a.outputFrames})`)
+ return {available:true,ok:issues.length===0,issues,checkedClips:a.clips.length,outputFrames:a.outputFrames,
+   sourceSequenceId:a.sourceSequenceId,outputSequenceId:a.sequenceId}
+}
