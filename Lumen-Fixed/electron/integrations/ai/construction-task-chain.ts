@@ -14,6 +14,8 @@ interface Snapshot {
   goal?:unknown;revision?:unknown;fps?:unknown
   status?:{stage?:unknown;complete?:unknown;uncovered?:unknown;uncovered_count?:unknown;next?:unknown}
   missing_timeline_transcripts?:unknown
+  next_context_section?:unknown;next_edit_section?:unknown
+  sectionPlan?:{context_target_frames?:unknown;edit_target_frames?:unknown;pending_context?:unknown;pending_editing?:unknown}
   discoveryPending?:unknown
   beats?:{total?:unknown};cuts?:{total?:unknown}
   discoveryScans?:{total?:unknown};discoveryEvents?:{total?:unknown}
@@ -45,6 +47,14 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   const uncovered=Array.isArray(s.status?.uncovered)?s.status.uncovered.map(safeRange).filter((x):x is ShortRange=>!!x):[]
   const fps=Number(s.fps)>0&&Number(s.fps)<=240?Number(s.fps):30
   const first=uncovered[0]
+  const nextBank=s.next_context_section&&typeof s.next_context_section==='object'
+    ?s.next_context_section as {id?:unknown;start?:unknown;end?:unknown}:null
+  const nextEdit=s.next_edit_section&&typeof s.next_edit_section==='object'
+    ?s.next_edit_section as {id?:unknown;start?:unknown;end?:unknown}:null
+  const editLabel=typeof nextEdit?.id==='string'?nextEdit.id:'the next unplanned edit section'
+  const bankLabel=typeof nextBank?.id==='string'?nextBank.id:'the next unbanked context section'
+  const bankRange=nextBank?safeRange(nextBank as {start:number;end:number}):null
+  const editRange=nextEdit?safeRange(nextEdit as {start:number;end:number}):null
   const reviewIssues=(s.review&&typeof s.review==='object'&&Array.isArray((s.review as {issues?:unknown}).issues))
     ?(s.review as {issues:string[]}).issues.filter(x=>typeof x==='string').slice(0,3):[]
   const bounded=first?{start:first.start,end:Math.min(first.end,first.start+Math.round(fps*60))}:null
@@ -54,15 +64,18 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   } else if(stage==='discover'){
     task=bounded?`Scan ONE not-yet-indexed current-timeline range [${bounded.start}, ${bounded.end}) with scan_construction_events. This scan finds search candidates only. Do not label them jokes or safe-to-cut based solely on audio levels.`
       :'Retrieve discovery scan gaps using get_video_construction; do not guess timeline ranges.'
+  } else if(stage==='context-bank'){
+    task=bankRange?`GLOBAL CONTEXT BANKING PASS, before editing: work on section ${bankLabel} [${bankRange.start}, ${bankRange.end}). Retrieve the actual saved evidence for that interval, inspect its next <=60-second gap with inspect_video_range, consult get_source_transcript / get_source_observations for relevant authorised assets, and when ALL of the section has receipt coverage call record_construction_context_section with key moments, rule/night/round state, distant callback leads and uncertainties. Do not start choosing deletions until the whole context bank is ready.`
+      :'Use get_video_construction to retrieve the next unbanked context section and finish indexing the WHOLE original timeline before editing.'
   } else if(stage==='investigate'){
-    task=bounded?`Inspect ONE uncovered timeline span [${bounded.start}, ${bounded.end}) using inspect_video_range, record grounded audiovisual findings with update_video_construction, and stop after saving. Use focused inspection for suspicious visual events.`
+    task=bounded?`Inspect ONE uncovered timeline span [${bounded.start}, ${bounded.end}) using inspect_video_range, record grounded audiovisual findings with update_video_construction, and stop after saving. Before interpreting a local event, retrieve its section's full bank context and any linked earlier/later setup; use focused inspection for suspicious visual events.`
       :'Fetch the next unfinished inspected range and save one source-grounded finding.'
   } else if(stage==='map'){
-    task='Build or revise ONE coherent chapter/scene group from the indexed footage and recorded evidence. Keep rules, round/night starts and endings, complete jokes, delayed callbacks and natural reaction tails. Check earlier context before asserting a story link. Save the story map.'
+    task=`Build or revise ONE coherent chapter/scene group, starting with ${editLabel}${editRange?` [${editRange.start}, ${editRange.end})`:''}. FIRST call get_construction_edit_context with a question about the goal, chronology and possible callbacks. Its global indexed context is available without loading the full video; query earlier and later setups whenever useful. Keep rules, round/night starts/endings, complete jokes and natural reaction tails. Save the beat map.`
   } else if(stage==='refine'){
     task=count(s.discoveryPending)>0
       ?'Use get_discovery_queue to find a candidate potentially affected by proposed deletions. Inspect its exact range using focused frames and real audio if necessary; save a justified keep/discard/uncertain decision. Do not discard based on a sampled overview.'
-      :'Choose ONE unresolved scene/cut decision. Inspect its setup/payoff context and exact edge frames, revise the plan, and validate only when enough evidence exists. Do not apply unreviewed destructive edits.'
+      :`Plan ONE local section ${editLabel}${editRange?` [${editRange.start}, ${editRange.end})`:''} using get_construction_edit_context, which searches the complete bank. Investigate distant setup/payoff links, inspect edge frames, record relevant beats/cuts, then call record_construction_edit_section with real receipts. Never treat local footage as self-contained if its humour or story requires another section. Do not apply until ALL editing sections are planned.`
   } else if(stage==='review'){
     task=reviewIssues.length
       ?`A completed review found a real defect: ${reviewIssues.map(x=>brief(x,180)).join(' | ')}. Use begin_construction_repair for one focused, bounded correction pass on the CURRENT permitted timeline; do not claim the edit is finished or assume deleted source is recoverable.`
@@ -73,7 +86,7 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   return [
     'LUMEN AUTONOMOUS VIDEO CONSTRUCTION — NEXT SMALL VERIFIED STEP',
     `Goal: ${brief(s.goal,2000)||'Use the saved project goal'}`,
-    `Saved state: stage=${stage}; revision=${count(s.revision)}; fps=${fps}; discovery scans=${count(s.discoveryScans?.total)}; candidates=${count(s.discoveryEvents?.total)}; pending candidates=${count(s.discoveryPending)}; beats=${count(s.beats?.total)}; proposed cuts=${count(s.cuts?.total)}.`,
+    `Saved state: stage=${stage}; revision=${count(s.revision)}; fps=${fps}; context bank pending=${count(s.sectionPlan?.pending_context)}; local edit sections pending=${count(s.sectionPlan?.pending_editing)}; context target frames=${count(s.sectionPlan?.context_target_frames)}; editing target frames=${count(s.sectionPlan?.edit_target_frames)}; discovery scans=${count(s.discoveryScans?.total)}; candidates=${count(s.discoveryEvents?.total)}; pending candidates=${count(s.discoveryPending)}; beats=${count(s.beats?.total)}; proposed cuts=${count(s.cuts?.total)}.`,
     recovery?`Recovery: ${brief(recovery,250)}. The previous request may have partially executed. Re-read saved state; do NOT replay unverified edits.`:'',
     `Task: ${task}`,
     'Start with get_video_construction (limit 5) and follow its current saved status. Do only this focused work unit, persist a durable checkpoint and return a concise result. No need to solve the whole movie in this call.',
