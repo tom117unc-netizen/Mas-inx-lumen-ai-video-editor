@@ -33,9 +33,18 @@ export function relatedStoryContext(state: ConstructionState, cutId: string) {
   }
   visit(focus.id)
   const anchors = new Set([focus.id, ...dependencies.map(b=>b.id), ...ancestors.map(b=>b.id)])
+  // Follow downstream links transitively: a callback may reference another
+  // callback rather than the original setup.
+  let expanded=true
+  while(expanded) {
+    expanded=false
+    for(const b of state.beats) if(!anchors.has(b.id) && b.dependsOn.some(d=>anchors.has(d))) {
+      anchors.add(b.id);expanded=true
+    }
+  }
   const related = state.beats
     .filter(b=>b.id!==focus.id && !dependencies.some(d=>d.id===b.id)
-      && b.dependsOn.some(dep=>anchors.has(dep)))
+      && anchors.has(b.id))
     .sort((a,b)=>a.start-b.start)
   const nearby = state.beats.filter(b=>b.id!==focus.id && b.kind!=='chapter')
     .sort((a,b)=>{
@@ -44,6 +53,30 @@ export function relatedStoryContext(state: ConstructionState, cutId: string) {
     }).slice(0,8)
   return {cut,focus,ancestors,dependencies,related,nearby,
     note:'Explicit dependency links indicate continuity to investigate; unlinked moments may still matter. Review the actual audiovisual footage before deleting.'}
+}
+
+const STOP_WORDS=new Set('this that with from have were when what where then they them your just into only about would there their because which while still stuff scene story stream video gaming during through really going before after first later again start ending reaction setup callback something nothing walking repeated waiting'.split(' '))
+function terms(value:string) {
+  return new Set((value.toLowerCase().match(/[a-z0-9]+/g)??[])
+    .filter(t=>t.length>=3 && !STOP_WORDS.has(t)))
+}
+/** Literal transcript matches elsewhere on the permitted timeline are leads,
+ * not proof of a callback, and do not substitute for audiovisual inspection.
+ */
+export function transcriptCallbackCandidates(project:Project,cut:Pick<ConstructionCut,'start'|'end'>,query:string,limit=20) {
+  const wanted=terms(query)
+  if(!wanted.size) return []
+  const fps=project.settings.fps
+  const outside=12
+  return timelineTranscript(project)
+    .filter(line=>line.end<cut.start/fps-outside || line.start>cut.end/fps+outside)
+    .map(line=>{
+      const matchedTerms=[...terms(line.text)].filter(t=>wanted.has(t))
+      return {line,matchedTerms}
+    })
+    .filter(hit=>hit.matchedTerms.length>=2 || (wanted.size===1 && hit.matchedTerms.some(t=>t.length>=6)))
+    .sort((a,b)=>b.matchedTerms.length-a.matchedTerms.length || a.line.start-b.line.start)
+    .slice(0,Math.max(1,Math.min(40,limit)))
 }
 
 export interface SpeechBoundaryViolation {
