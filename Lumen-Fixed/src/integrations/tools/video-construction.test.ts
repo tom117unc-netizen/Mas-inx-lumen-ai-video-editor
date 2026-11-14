@@ -287,6 +287,21 @@ it('refuses to certify a new discovery scan when audible timeline speech has not
  expect(scan.candidates.some((e:any)=>e.signal==='speech')).toBe(true)
  expect((await run('get_video_construction') as any).missing_timeline_transcripts).toEqual([])
 })
+it('allows scanning gameplay-only audio after a completed no-speech transcription',async()=>{
+ const p=getProject(),clip=Object.values(p.clips)[0]
+ clip.assetId='gameplay-audio'
+ p.assets['gameplay-audio']={id:'gameplay-audio',name:'Gameplay without commentary',kind:'video',
+  hasAudio:true,duration:10,addedAt:1,source:{type:'file',url:'file://gameplay.mp4',
+    fileName:'gameplay.mp4',mime:'video/mp4',size:1}}
+ useEditor.getState().loadProject(p)
+ await run('begin_video_construction',{goal:'Keep interesting silent gameplay'})
+ expect((await run('get_video_construction') as any).missing_timeline_transcripts).toContain('gameplay-audio')
+ const next=structuredClone(getProject())
+ next.assets['gameplay-audio'].transcript=[] // Transcriber ran; zero words is not a missing result.
+ useEditor.getState().loadProject(next)
+ expect((await run('get_video_construction') as any).missing_timeline_transcripts).toEqual([])
+ expect(await run('scan_construction_events',{start_frame:0,end_frame:300})).toMatchObject({start_frame:0,end_frame:300})
+})
 it('persists evidence revisions when rewriting a story beat without changing counts',async()=>{
  await run('begin_video_construction',{goal:'Make a coherent game highlight'})
  const first=(await run('get_video_construction') as any).revision
