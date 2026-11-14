@@ -415,6 +415,7 @@ it('publishes an independently editable output sequence without changing the ori
  expect(mapping.clips[0].outputClipId).not.toBe(clip.id)
  expect(Object.values(project.clips)[0].duration).toBe(300)
  expect(await run('audit_assembled_source_map')).toMatchObject({available:true,ok:true,checkedClips:1,outputFrames:300})
+ expect(await run('audit_output_narrative')).toMatchObject({available:true,ok:true,checkedEssentialMoments:0})
  const corrupted=structuredClone(project)
  corrupted.clips[mapping.clips[0].outputClipId].inPoint+=7
  const {auditPublishedAssembly}=await import('@/editor/construction-assembler')
