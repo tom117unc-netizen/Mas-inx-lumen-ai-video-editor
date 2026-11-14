@@ -28,15 +28,20 @@ function splitRanges(scope:SectionRange[],target:number,hints:SectionHint[],pref
     let position=r.start
     while(position<r.end) {
       const remaining=r.end-position
-      let at=Math.min(r.end,position+target)
-      if(remaining>target && remaining<target*1.5)at=r.end
+      // Editing sections shrink modestly where nearby events are dense. Global
+      // context sections remain broad for a consistent cross-video story map.
+      const localDensity=prefix==='edit'?
+        hints.filter(h=>h.start>=position && h.start<position+target).length:0
+      const localTarget=localDensity>=10?Math.max(1,Math.round(target*.8)):target
+      let at=Math.min(r.end,position+localTarget)
+      if(remaining>localTarget && remaining<localTarget*1.5)at=r.end
       if(at<r.end) {
-        const lower=Math.max(position+1,Math.round(position+target*.70))
-        const upper=Math.min(r.end-1,Math.round(position+target*1.30))
+        const lower=Math.max(position+1,Math.round(position+localTarget*.70))
+        const upper=Math.min(r.end-1,Math.round(position+localTarget*1.30))
         const possible=hints.filter(h=>h.start>=position && h.end<=r.end && validRange(h))
           .flatMap(h=>[h.start,h.end].map(frame=>({frame,
             score:(h.kind==='clip-boundary'?5:h.kind==='chapter'?4:h.kind==='audio-drop'?3:2)*
-              (h.strength??.5)-Math.abs(frame-at)/target-(h.kind==='clip-boundary'&&frame===h.end?.2:0)})))
+              (h.strength??.5)-Math.abs(frame-at)/localTarget-(h.kind==='clip-boundary'&&frame===h.end ? .2 : 0)})))
           .filter(h=>h.frame>=lower && h.frame<=upper &&
             !hints.some(ev=>ev.start<h.frame && ev.end>h.frame && ev.kind!=='clip-boundary'))
           .sort((a,b)=>b.score-a.score)
