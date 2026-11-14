@@ -66,7 +66,16 @@ it('requires actual output inspection before recording a successful review',asyn
  await run('inspect_video_range',{start_frame:0,end_frame:200,mode:'overview'})
  await expect(run('review_video_construction',{story:'Clear',pacing:'Good',issues:[]})).rejects.toThrow(/join/i)
  await run('inspect_video_range',{start_frame:99,end_frame:102,mode:'boundary'})
+ await expect(run('review_video_construction',{story:'Setup and payoff remain',pacing:'Good',issues:[]})).rejects.toThrow(/audio/i)
+ const evidence=await run('inspect_construction_join_audio',{join_frame:100}) as any
+ expect(evidence.saved).toBe(true)
+ expect(evidence.report.flags).toContain('silent-or-unverifiable')
  expect(await run('review_video_construction',{story:'Setup and payoff remain',pacing:'Waiting shortened without losing reaction',issues:[]})).toMatchObject({status:{complete:true}})
+ expect(await run('review_video_construction',{story:'Callback missing',pacing:'Transition disrupts the story',issues:['The callback setup needs another inspection']})).toMatchObject({status:{complete:false}})
+ const repaired=await run('begin_construction_repair',{goal:'Fix the callback continuity within the current timeline'}) as any
+ expect(repaired.repairOf).toMatchObject({depth:1,targetFrames:[100]})
+ expect(getProject().construction?.applied).toBeUndefined()
+ expect(await run('get_video_construction')).toMatchObject({status:{stage:'investigate'},repairOf:{depth:1}})
 })
 it('reports an unsafe cut through available speech instead of issuing a receipt',async()=>{
  const p=createEmptyProject('Dialogue')
@@ -84,6 +93,10 @@ it('reports an unsafe cut through available speech instead of issuing a receipt'
  expect(report.recorded).toBe(false)
  expect(report.speech.violations.map((v:any)=>v.edge)).toEqual(['start','end'])
  expect(getProject().construction?.contextInspections).toEqual([])
+})
+it('rejects join audio inspection before any edit or at an unknown frame',async()=>{
+ await run('begin_video_construction',{goal:'Protect reactions'})
+ await expect(run('inspect_construction_join_audio',{join_frame:120})).rejects.toThrow(/apply/i)
 })
 it('supports explicit pause and resume without discarding the story map',async()=>{
  await run('begin_video_construction',{goal:'Story'})
