@@ -28,6 +28,7 @@ Ask for status to inspect progress without authorizing more edits. Ask to resume
 - `update_video_construction`: upsert coverage, hierarchical beats, essential dependencies, protected intervals and proposed removals. All times are half-open integer timeline-frame ranges.
 - `inspect_cut_context`: return linked and nearby story context, timeline dialogue around a removal and bounded lexical clues to potential distant callbacks. Records a fresh retrieval receipt, not a quality approval. Transcript phrase boundaries that intersect a cut prevent a receipt.
 - `next_event_probe`: midpoint refinement only for a single bracketed change; not a detector and not appropriate for repeated disappearances.
+- `record_construction_narrative_moments`: record real timed challenge rules, round/night starts and results, joke setups/payoffs and callbacks, with verified inspector receipts, essentialness and typed dependencies. Required events must be kept and required story links must be coherent.
 - `record_keep_first_selections`: add or revise a small batch of original source moments in intentional output order, with grounded story roles, beat IDs and real inspection receipts.
 - `preview_keep_first_assembly`: validate complete source retention, protected discoveries, setup/payoff chronology and exact cut-edge visual/audio evidence, before creating any output.
 - `publish_keep_first_assembly`: atomically publish a **separate editable sequence**, preserving the original and recording exact source-to-output clip mappings.
