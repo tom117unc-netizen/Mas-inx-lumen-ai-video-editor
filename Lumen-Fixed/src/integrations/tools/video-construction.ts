@@ -13,6 +13,7 @@ import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
 import { assessVideoQuality, defaultVideoBrief } from '@/editor/video-quality'
 import { assessJoinAudio } from '@/editor/construction-join-audio'
+import { previewAudioSplice } from '@/editor/construction-splice-audio'
 import { isAudible, levelFrames, prepareAudio, renderMix } from '@/engine/audio-engine'
 import { speechScript } from '@/engine/audio'
 import { encodeWav } from '@/engine/wav'
@@ -106,7 +107,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
         next_context_probe:nextContextProbe?{section_id:pending!.id,...nextContextProbe}:null,
         next_context_inspection_ids:sectionReceipts.map(i=>i.id).slice(0,64),
         next_edit_section:s.sections?.editing.find(x=>!x.planned)??null,
-        sectionPlan:s.sections?{context_target_frames:s.sections.contextTargetFrames,edit_target_frames:s.sections.editTargetFrames,context:page(s.sections.context),editing:page(s.sections.editing),pending_context:s.sections.context.filter(x=>!x.indexed).length,pending_editing:s.sections.editing.filter(x=>!x.planned).length}:undefined,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review,narrativeAudit:s.assembly&&s.applied?auditOutputNarrative(s):null}
+        sectionPlan:s.sections?{context_target_frames:s.sections.contextTargetFrames,edit_target_frames:s.sections.editTargetFrames,context:page(s.sections.context),editing:page(s.sections.editing),pending_context:s.sections.context.filter(x=>!x.indexed).length,pending_editing:s.sections.editing.filter(x=>!x.planned).length}:undefined,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),spliceAudioChecks:page(s.spliceAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review,narrativeAudit:s.assembly&&s.applied?auditOutputNarrative(s):null}
     },
   },
   {
@@ -710,6 +711,51 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     },
   },
   {
+    name:'inspect_keep_first_join_audio',
+    description:'PRE-PUBLISH SOUND PREVIEW: render the genuine original timeline mix immediately before and after ONE consecutive pair of selected source moments, stitch their short audio handles in proposed output order, and attach a bounded WAV for an audio-capable model. Numeric click/level diagnostics are leads, NOT proof of speech/laughter or acceptable pacing. This call is scoped to the source footage already on the timeline and saves a source-linked receipt.',
+    inputSchema:obj({join_index:int('Zero-based index of the join between consecutive selected source moments',{minimum:0})},['join_index']),
+    run:async a=>{
+      const s=state(),p=getProject(),fingerprint=constructionFingerprint(p)
+      const selections=validateKeepFirstSelections(p,s)
+      const index=z.number().int().nonnegative().parse(a.join_index)
+      if(index>=selections.length-1)throw new Error('Unknown keep-first join; inspect the selected spans in get_video_construction')
+      const left=selections[index],right=selections[index+1],fps=p.settings.fps
+      const frames=Math.max(1,Math.round(fps*.5))
+      const leftStart=Math.max(left.start,left.end-frames),rightEnd=Math.min(right.end,right.start+frames)
+      await prepareAudio(p)
+      // Audio rendering is serial to avoid overlapping work on the shared mix engine.
+      const before=await renderMix(p,leftStart/fps,left.end/fps,{sampleRate:24000})
+      const after=await renderMix(p,right.start/fps,rightEnd/fps,{sampleRate:24000})
+      const expectedBefore=(left.end-leftStart)/fps,expectedAfter=(rightEnd-right.start)/fps
+      if(Math.abs(before.duration-expectedBefore)>Math.max(.001,2/before.sampleRate)||
+         Math.abs(after.duration-expectedAfter)>Math.max(.001,2/after.sampleRate))
+        throw new Error('Rendered source audio handle duration mismatched exact selected source frames')
+      const preview=previewAudioSplice(before,after)
+      const data=base64Bytes(encodeWav(preview.pcm))
+      if(data.length>4_000_000)throw new Error('Source audio preview exceeds inline WAV budget')
+      if(constructionFingerprint(getProject())!==fingerprint||getProject().construction!==s)
+        throw new Error('Source timeline or selected construction changed while previewing the splice')
+      const receipt={id:uid('splice_audio'),fingerprint,leftSelectionId:left.id,rightSelectionId:right.id,
+        leftEnd:left.end,rightStart:right.start,joinIndex:index,report:preview.report}
+      const next=structuredClone(s)
+      next.spliceAudioChecks=[...(next.spliceAudioChecks??[]).filter(v=>
+        !(v.leftSelectionId===left.id&&v.rightSelectionId===right.id)),receipt].slice(-1000)
+      await persist(next)
+      const joinOutputFrame=selections.slice(0,index+1).reduce((n,x)=>n+x.end-x.start,0)
+      return withAudio({
+        saved:true,receipt_id:receipt.id,join_index:index,output_join_frame:joinOutputFrame,
+        left_selection_id:left.id,right_selection_id:right.id,
+        actual_left_source_frames:[leftStart,left.end],actual_right_source_frames:[right.start,rightEnd],
+        source_fingerprint:fingerprint,report:preview.report,
+        sample_rate:preview.pcm.sampleRate,channels:preview.pcm.numberOfChannels,
+        audio_seconds:preview.duration,join_sample:preview.joinSample,
+        transcript_before:timelineTranscript(p,Math.max(0,left.end/fps-3),left.end/fps).slice(-30),
+        transcript_after:timelineTranscript(p,right.start/fps,right.start/fps+3).slice(0,30),
+        note:'The attached WAV is the proposed direct source join BEFORE publishing, not the final rendered timeline. A receiving Gemini audio model may listen to its words, reaction tails, game sound and music; text-only models cannot. Review actual output audio again after publishing because transitions/fades can differ.'
+      },{data,mimeType:'audio/wav'})
+    },
+  },
+  {
     name:'preview_keep_first_assembly',
     description:'Validate proposed source selections without changing any footage. Checks timeline permissions, protected events, source evidence, necessary earlier setups and final story order. Returns original-to-output frame mapping and precise timing.',
     inputSchema:obj({name:str('Optional new sequence name')}),
@@ -721,6 +767,17 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
         selected_segments:out.selections,output_frames:out.outputFrames,
         original_frames:out.originalFrames,join_frames:out.joins,
         preserved_clips:out.clips.length,source_map_preview:out.clips.slice(0,20),
+        audio_preflight:out.selections.slice(0,-1).map((section,i)=>{
+          const following=out.selections[i+1]
+          const original=(s.sourceSelections??[]).find(x=>x.id===section.selectionId)
+          const nextOriginal=(s.sourceSelections??[]).find(x=>x.id===following.selectionId)
+          const saved=s.spliceAudioChecks?.find(v=>v.fingerprint===s.fingerprint&&
+            v.leftSelectionId===section.selectionId&&v.rightSelectionId===following.selectionId&&
+            v.leftEnd===original?.end&&v.rightStart===nextOriginal?.start&&v.joinIndex===i)
+          return {join_index:i,output_join_frame:section.outputEnd,
+            inspected:!!saved,report:saved?.report??null,
+            follow_up:saved?'Review any flagged acoustic risk with actual listening after publication':'Call inspect_keep_first_join_audio before publishing to hear the proposed join'}
+        }),
         note:'A structurally verified assembly is not proof of humour, watchability or smooth audio. Publish only after narrative verification and review the output.'}
     },
   },
