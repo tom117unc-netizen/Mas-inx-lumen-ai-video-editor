@@ -81,6 +81,7 @@ it('requires actual output inspection before recording a successful review',asyn
  audioMock.click=true
  const risk=await run('inspect_construction_join_audio',{join_frame:100}) as any
  expect(risk.report.flags).toContain('possible-click')
+ expect(await run('get_video_construction')).toMatchObject({status:{stage:'review',complete:false}})
  await expect(run('review_video_construction',{story:'Fine',pacing:'Fine',issues:[]})).rejects.toThrow(/verdict/i)
  const join_verdicts=[{frame:100,verdict:'accept',reason:'A deliberately abrupt cut at the on-screen impact, justified by the inspected action and timing.'}]
  expect(await run('review_video_construction',{story:'The impact stays clear',pacing:'The hard edit is deliberate',issues:[],join_verdicts})).toMatchObject({status:{complete:true}})
