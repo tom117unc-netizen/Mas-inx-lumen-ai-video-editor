@@ -10,7 +10,7 @@ describe('pre-publish real-audio splice handles',()=>{
    const a=buffer([.2,.1,0,0]),b=buffer([0,.3,.4,.5])
    const result=previewAudioSplice(a,b)
    expect(result.joinSample).toBe(4)
-   expect([...result.pcm.getChannelData(0)]).toEqual(expect.arrayContaining([.2]))
+   expect(result.pcm.getChannelData(0)[0]).toBeCloseTo(.2,5)
    expect(result.pcm.getChannelData(0)).toHaveLength(8)
    expect(result.pcm.getChannelData(0)[3]).toBe(0)
    expect(result.pcm.getChannelData(0)[5]).toBeCloseTo(.3,5)
