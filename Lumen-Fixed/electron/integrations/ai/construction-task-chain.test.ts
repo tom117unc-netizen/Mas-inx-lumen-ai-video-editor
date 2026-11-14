@@ -35,6 +35,10 @@ describe('bounded persistent video-construction call chains',()=>{
     .toMatch(/get_discovery_queue/)
   expect(constructionTaskPrompt({status:{stage:'review'}}))
     .toMatch(/ONE unfinished edited join/)
+  expect(constructionTaskPrompt({status:{stage:'review'},review:{issues:['Missing opening rules']}}))
+    .toMatch(/begin_construction_repair/)
+  expect(constructionTaskPrompt({status:{stage:'review'},review:{issues:['Missing opening rules']}}))
+    .toMatch(/Missing opening rules/)
  })
  it('uses finite micro-step and total batch limits',()=>{
   expect(CONSTRUCTION_MICRO_STEPS).toBeGreaterThan(1)
