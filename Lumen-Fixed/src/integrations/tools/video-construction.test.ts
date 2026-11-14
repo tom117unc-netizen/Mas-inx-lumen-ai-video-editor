@@ -342,3 +342,37 @@ it('persists evidence revisions when rewriting a story beat without changing cou
  expect(last.beats.total).toBe(1)
  expect(last.beats.items[0].summary).toMatch(/rule explanation/)
 })
+
+it('requires the full context pass first, then reuses identical global-bank lookups without fake progress',async()=>{
+ await run('begin_video_construction',{goal:'Link the full recording setup to the eventual callback'})
+ const state=(await run('get_video_construction') as any)
+ expect(state.sectionPlan.pending_context).toBeGreaterThan(0)
+ const edit=state.next_edit_section.id
+ await expect(run('get_construction_edit_context',{section_id:edit,question:'Where does the callback start?'}))
+   .rejects.toThrow(/whole-timeline context banking/i)
+ const overview=await run('inspect_video_range',{start_frame:0,end_frame:300,mode:'overview'}) as any
+ const id=state.next_context_section.id
+ await expect(run('record_construction_context_section',{
+   section_id:id,summary:'Observed the opening mock footage and later change, with uncertainty.',
+   key_moments:['A visual change is possible'],uncertainties:['Unknown meaning'],
+   inspection_ids:[overview.json.inspection_id],
+ })).rejects.toThrow(/discovery/i)
+ await run('scan_construction_events',{start_frame:0,end_frame:300})
+ const section=(await run('get_video_construction') as any).next_context_section
+ await run('record_construction_context_section',{
+   section_id:section.id,
+   summary:'Inspected the authorised visual transition in the mock recording, with uncertain meaning.',
+   key_moments:['Observed a changing sampled scene'],
+   uncertainties:['No semantic game event was inferred from the stills'],
+   inspection_ids:[overview.json.inspection_id],
+ })
+ const first=await run('get_construction_edit_context',{section_id:edit,question:'Where does the callback start?'}) as any
+ expect(first.context.some((x:any)=>x.id===section.id)).toBe(true)
+ const revision=(await run('get_video_construction') as any).revision
+ const again=await run('get_construction_edit_context',{section_id:edit,question:'Where does the callback start?'}) as any
+ expect(again.reused).toBe(true)
+ expect((await run('get_video_construction') as any).revision).toBe(revision)
+ await expect(run('record_construction_edit_section',{section_id:edit,
+   summary:'This local section is unplanned because a narrative beat was not established.',
+   inspection_ids:[overview.json.inspection_id]})).rejects.toThrow(/story beat/i)
+})
