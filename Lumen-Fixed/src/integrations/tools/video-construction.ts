@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { assertDiscoveryDecisionEvidence, beginConstruction, constructionFingerprint, constructionStatus, constructionStorySignature, mergeRanges, unscannedDiscoveryRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
 import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-event-index'
 import { nextContextInspectionProbe, planConstructionSections, selectBankContext } from '@/editor/construction-sections'
-import { composeKeepFirstSequence, validateKeepFirstSelections, validateOutputSourceMap } from '@/editor/construction-assembler'
+import { auditPublishedAssembly, composeKeepFirstSequence, validateKeepFirstSelections, validateOutputSourceMap } from '@/editor/construction-assembler'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
@@ -691,6 +691,16 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     },
   },
   {
+    name:'audit_assembled_source_map',
+    description:'Independent deterministic audit of the ACTUAL open assembled output, not the AI editor explanation. Verify original source preserved, selected clip identity, precise source in-points, output order, lengths, track routing and missing/unmapped clips. Does not judge whether a joke is funny or a scene is watchable.',
+    inputSchema:obj({}),
+    run:async()=>{
+      const s=state()
+      if(!s.assembly)throw new Error('Only a published keep-first sequence has a verifiable original source map')
+      return auditPublishedAssembly(getProject(),s)
+    },
+  },
+  {
     name:'review_video_construction',
     description:'Record a post-edit review after inspecting the actual new joins and whole output. Completion requires every join inspected, sampled audiovisual coverage of the output, explicit story/pacing findings, no unresolved issues and no structural errors. Findings are model judgements, not proof of human-quality editing.',
     inputSchema:obj({story:str('Can a new viewer understand the progression, setups and payoffs?'),pacing:str('Assess internal scene rhythm, necessary silence and transitions'),issues:list('Unresolved problems; empty only if checks passed',str('Problem'),{maxItems:100}),join_verdicts:list('Explicit decision for each flagged audio join; accept only with evidence from the actual scene',obj({frame,verdict:oneOf('Join decision',['accept','repair']),reason:str('Specific rationale explaining intentionality or defect',{minLength:20})},['frame','verdict','reason']),{maxItems:100})},['story','pacing','issues']),
@@ -715,11 +725,12 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       if(findings.join_verdicts.some(v=>!s.applied!.joins.includes(v.frame)))
         throw new Error('Verdict refers to unknown join')
       const quality=assessVideoQuality(p,defaultVideoBrief('gaming-highlights'))
-      const issues=[...findings.issues,
+      const sourceAudit=s.assembly?auditPublishedAssembly(p,s):null
+      const issues=[...findings.issues,...(sourceAudit?.issues??[]),
         ...findings.join_verdicts.filter(v=>v.verdict==='repair').map(v=>`Audio join ${v.frame} needs repair: ${v.reason}`),
         ...quality.findings.filter(f=>f.severity==='error').map(f=>f.message)]
       const next=structuredClone(s);next.review={story:findings.story,pacing:findings.pacing,issues,joinVerdicts:findings.join_verdicts,joins:s.applied.joins,fingerprint};await persist(next)
-      return {status:constructionStatus(p,next),quality}
+      return {status:constructionStatus(p,next),quality,sourceAudit}
     },
   },
 ]
