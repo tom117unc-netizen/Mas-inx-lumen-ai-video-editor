@@ -73,7 +73,7 @@ it('reports an unsafe cut through available speech instead of issuing a receipt'
  const c=createClip({kind:'video',trackId:p.tracks[0].id,start:0,duration:300,assetId:'source'})
  p.clips[c.id]=c
  p.assets.source={id:'source',name:'Stream',kind:'video',hasAudio:true,duration:10,addedAt:1,
-   source:{type:'file',url:'file://stream.mp4',mime:'video/mp4',size:1},
+   source:{type:'file',url:'file://stream.mp4',fileName:'stream.mp4',mime:'video/mp4',size:1},
    transcript:[{start:4.5,end:6.5,text:'Wait I have a plan'}]}
  useEditor.getState().loadProject(p)
  await run('begin_video_construction',{goal:'Story'})
