@@ -54,7 +54,7 @@ describe('duration-aware context banking and local editing',()=>{
   const noisy=planConstructionSections(scope,30,Array.from({length:28},(_,i)=>({
     start:i*45+600,end:i*45+601,kind:'visual-change',strength:.8,
   })))
-  expect(noisy.editing.length).toBeGreaterThan(quiet.editing.length)
+  expect(noisy.editing[0].end-noisy.editing[0].start).toBeLessThan(quiet.editing[0].end-quiet.editing[0].start)
   expect(noisy.context.length).toBe(quiet.context.length)
  })
  it('finds the exact missing bounded context probe across saved receipt pages',()=>{
