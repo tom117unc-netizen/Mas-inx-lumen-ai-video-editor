@@ -21,7 +21,7 @@ export interface ConstructionEventFinding {
 const hasCoverage=(receipts:FrameRange[],range:FrameRange)=>
   mergeRanges(receipts).some(r=>r.start<=range.start&&r.end>=range.end)
 const isAudioMeaning=(kind:ObservedEventKind)=>
-  ['reaction','laughter','joke','music','game-sound'].includes(kind)
+  ['laughter','music','game-sound'].includes(kind)
 
 /** Pure evidence gate. A focus receipt is still sampled, not guaranteed to
  * capture everything between frames. Audio claims must cite a recorded heard
@@ -53,6 +53,10 @@ export function validateConstructionEventFinding(
       if(frame>=event.start&&frame<event.end&&!actualFrames.has(frame))
         throw new Error(`Semantic event ${event.id} missed exact sampled visual trigger frame ${frame}`)
   }
+  // Visual reactions and visual jokes can exist without audible evidence.
+  // Actual laughter, music and sound-effect semantics are inherently audible.
+  if(f.confidence==='observed'&&f.kind==='speech'&&event.signal!=='speech'&&!f.audioObservationIds.length)
+    throw new Error('A confident speech claim requires a timed transcript candidate or a real audio observation')
   if(f.confidence==='observed'&&isAudioMeaning(f.kind)&&!f.audioObservationIds.length)
     throw new Error(`Sound/delivery-dependent event ${event.id} requires a recorded real-audio listening observation or must remain uncertain`)
   for(const id of f.audioObservationIds){
