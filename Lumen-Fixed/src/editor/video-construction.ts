@@ -70,7 +70,7 @@ export interface ConstructionState {
   spliceAudioChecks?:ConstructionPreflightAudioCheck[];
   repairOf?:{fingerprint:string;targetFrames:number[];issues:string[];depth:number};
   applied?:{fingerprint:string;joins:number[]};
-  review?:{fingerprint:string;joins:number[];story:string;pacing:string;issues:string[];joinVerdicts?:ConstructionJoinVerdict[]};
+  review?:{fingerprint:string;joins:number[];story:string;pacing:string;issues:string[];joinVerdicts?:ConstructionJoinVerdict[];outputAuditVersion?:1};
 }
 declare module './types' { interface Project { construction?:ConstructionState } }
 export function constructionFingerprint(p:Project) {
@@ -311,7 +311,8 @@ export function constructionStatus(p:Project,s:ConstructionState) {
   if(s.paused) return {stage:'paused',complete:false,uncovered:[],next:'Resume explicitly to continue construction'}
   if(s.applied) {
     const review=s.review
-    const complete=!!review && review.fingerprint===s.applied.fingerprint && !review.issues.length && s.applied.joins.every(j=>review.joins.includes(j))
+    const complete=!!review && review.fingerprint===s.applied.fingerprint && !review.issues.length &&
+      (!s.assembly||review.outputAuditVersion===1) && s.applied.joins.every(j=>review.joins.includes(j))
     return {stage:complete?'complete':'review',complete,uncovered:[],next:complete?'Finished editorial checks':'Inspect edited join frames and rendered join audio, then review story and pacing across the whole output'}
   }
   const unscanned=(s.discoveryRequired||s.discoveryScans?.length)?unscannedDiscoveryRanges(s):[]
