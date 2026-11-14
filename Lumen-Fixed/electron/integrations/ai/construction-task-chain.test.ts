@@ -65,7 +65,7 @@ describe('bounded persistent video-construction call chains',()=>{
   expect(constructionTaskPrompt({status:{stage:'refine'},discoveryPending:4}))
     .toMatch(/record_construction_event_findings/)
   expect(constructionTaskPrompt({status:{stage:'review'}}))
-    .toMatch(/ONE unfinished edited join/)
+    .toMatch(/audit_output_narrative first/)
   expect(constructionTaskPrompt({status:{stage:'review'},review:{issues:['Missing opening rules']}}))
     .toMatch(/begin_construction_repair/)
   expect(constructionTaskPrompt({status:{stage:'review'},review:{issues:['Missing opening rules']}}))
