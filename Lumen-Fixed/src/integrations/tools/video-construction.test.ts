@@ -76,6 +76,18 @@ it('registers a resumable workflow and marks project dirty without changing clip
  const reloaded=JSON.parse(JSON.stringify(getProject()));useEditor.getState().loadProject(reloaded)
  expect(await run('get_video_construction')).toMatchObject({status:{stage:'discover'}})
 })
+it('returns only bounded checkpoint counts without loading the full editorial ledger',async()=>{
+ await run('begin_video_construction',{goal:'Reconstruct YapYap from current source only'})
+ const summary=await run('get_construction_checkpoint') as any
+ expect(summary.goal).toContain('YapYap')
+ expect(summary.status.stage).toBe('discover')
+ expect(summary.status.uncovered.length).toBeLessThanOrEqual(3)
+ expect(summary.discoveryScans).toEqual({total:0})
+ expect(summary.inspections).toEqual({total:0})
+ expect(summary.sectionPlan.pending_context).toBeGreaterThan(0)
+ expect(summary).not.toHaveProperty('scope')
+ expect(summary).not.toHaveProperty('coverage')
+})
 it('inspects exact neighbouring frames separately with synchronized transcript/audio metadata',async()=>{
  await run('begin_video_construction',{goal:'Story'})
  const result=await run('inspect_video_range',{start_frame:99,end_frame:102,mode:'boundary'}) as any
