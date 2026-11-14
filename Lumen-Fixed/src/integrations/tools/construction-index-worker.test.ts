@@ -25,7 +25,7 @@ afterEach(()=>{
 })
 describe('resumable local construction indexing',()=>{
  it('plans exact unscanned chunks without crossing source gaps or rescanning saved coverage',()=>{
-  const s=fixture()
+  const s=structuredClone(fixture())
   s.scope=[{start:0,end:200},{start:300,end:600}]
   s.discoveryScans=[{id:'a',start:0,end:100,fingerprint:s.fingerprint,visualFrames:[],audioMeasured:true,transcriptLines:0,eventCount:0}]
   expect(nextIndexChunk(s,150)).toEqual({start:100,end:200})
