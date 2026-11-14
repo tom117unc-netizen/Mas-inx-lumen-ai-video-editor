@@ -1,0 +1,36 @@
+# Contextual video construction
+
+This upgrade adds a persistent editorial workflow to the existing Lumen Copilot. It is available to the built-in cloud model and through the editor's registered tools to local agents/MCP clients. Cloud-model runs can continue in bounded batches; external agents manage their own execution loops.
+
+## Use
+
+1. Put the footage you permit Lumen to use on the current timeline, and save the project.
+2. Ask the Copilot to construct a complete video. Include the premise, intended audience, approximate length and any essential moments. For example: “Turn this stream into a coherent 20-minute video. Establish the challenge, preserve each night's beginning and outcome, keep complete jokes and reactions, and tighten repetition inside scenes. Use only the footage already on the timeline.”
+3. The Copilot investigates the timeline, records audiovisual coverage and a hierarchy of chapters/scenes/beats, protects essential moments and dependencies, and proposes exact frame ranges to remove.
+4. Boundary inspection returns every frame in a small window as separate images. Application requires coverage and adjacent-frame evidence, validates dependencies, and applies all proposed removals in one undo step.
+5. After application, the output must be inspected again: new joins plus sampled coverage of the whole edit. Story and pacing findings are recorded separately from structural timeline checks.
+
+Ask for status to inspect progress without authorizing more edits. Ask to resume to continue. Ask to pause construction to release the AI editing safeguards without discarding the map. Manual timeline edits remain available; changed timing or media identity makes the old plan stale and requires re-mapping. Undo/redo of edits is supported, but construction metadata is retained separately and can become stale.
+
+## Tools and state
+
+- `begin_video_construction`, `get_video_construction`, `resume_video_construction`, `pause_video_construction`
+- `inspect_video_range`: overview up to 60 seconds / 12 sampled frames; boundary up to 12 consecutive frames; separate images at 1280px by default, up to 1920px.
+- `update_video_construction`: upsert coverage, hierarchical beats, essential dependencies, protected intervals and proposed removals. All times are half-open integer timeline-frame ranges.
+- `next_event_probe`: midpoint refinement only for a single bracketed change; not a detector and not appropriate for repeated disappearances.
+- `apply_video_construction`: validate or apply the proposed removals atomically.
+- `review_video_construction`: require output inspection, new-join checks and explicit story/pacing findings before marking the pass complete.
+
+The compact plan and inspection receipts are stored in the `.lumen` project and explicitly saved after updates. Detailed source transcripts/research remain available in the existing Context Bank. Overview coverage means sampled inspection, not that every frame was observed. A receipt proves that inspection tools ran; interpretation and editorial judgement still belong to the model.
+
+## Limits and acceptance testing
+
+Audio evidence currently consists of transcript and measured audio properties. These tools do not supply semantic listening to laughter, sarcasm, delivery or game sounds. Uncertainty must remain explicit. Bisection does not discover an event until actual frame observations bracket it. The first construction operation is chronological removal/tightening, not automatic scene rearrangement or a new effects system.
+
+Cloud runs allow up to twelve additional 24-step batches, stop when the recorded progress stops changing, and report unfinished work rather than equating a budget limit with completion. A saved plan can be resumed. Use the installed provider's normal usage/cost controls.
+
+Before trusting a long stream edit, run a short real-footage trial containing a silent visual setup, a joke with a delayed payoff, a callback to an earlier scene, and speech at both sides of a proposed cut. Check listening quality, source/timeline correspondence, synchronization, natural delivery, undo, save/reopen and export in the Windows build. Unit tests and a successful production build do not establish these perceptual outcomes.
+
+## Build on Windows
+
+Use branch `feature/contextual-video-construction`, application directory `Lumen-Fixed`, and Node 24. Run `npm ci`, `npm test`, `npm run build`, then `npm run dist`. The existing CI supplies the missing-upstream-icon fallback and packages the Windows installer as a workflow artifact. The base application still reports version 1.4.0; identify this experimental build by its branch/commit. No installer is published as an upstream release by this change.

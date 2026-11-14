@@ -1,3 +1,4 @@
+import { constructionContinuation, isConstructionExecutionTool } from './construction-continuation'
 import { dynamicTool, generateText, isStepCount, jsonSchema, streamText, type ModelMessage, type ToolSet } from 'ai'
 import { COPILOT_INSTRUCTIONS, type AgentErrorCode, type AgentEvent, type AgentEventBody, type AgentRunRequest } from '../../../shared/ai'
 import { IPC, type BridgeTool } from '../../../shared/integrations'
@@ -260,6 +261,11 @@ async function runModel(req: AgentRunRequest) {
     let afterTool = false
     let usage: { inputTokens?: number; outputTokens?: number } | undefined
     const retried = { pictures: false, effort: false }
+    let constructionActive = false
+    let constructionBatches = 0
+    let constructionProgress: string | undefined
+    let currentHistory = history
+    let currentUser = user
     const carry = (steps: ModelMessage[]) => {
       const kept = stripPictures(steps)
       return native ? stripReasoning(kept) : kept
@@ -271,7 +277,7 @@ async function runModel(req: AgentRunRequest) {
         const result = streamText({
           model,
           system: req.instructions ? `${COPILOT_INSTRUCTIONS}\n\n${req.instructions}` : COPILOT_INSTRUCTIONS,
-          messages: [...history, user, ...carried],
+          messages: [...currentHistory, currentUser, ...carried],
           tools,
           headers,
           ...effortOpts,
@@ -297,6 +303,7 @@ async function runModel(req: AgentRunRequest) {
               if (part.text) emit({ type: 'reasoning', delta: part.text })
               break
             case 'tool-call':
+              if (isConstructionExecutionTool(part.toolName)) constructionActive = true
               afterTool = true
               emit({ type: 'tool-start', callId: part.toolCallId, tool: part.toolName, input: part.input })
               break
@@ -314,9 +321,27 @@ async function runModel(req: AgentRunRequest) {
           }
         }
         const steps = (await result.responseMessages) as ModelMessage[]
-        const next = trim(forHistory([...stored, user, ...carried, ...steps]))
+        const next = trim(forHistory([...currentHistory, currentUser, ...carried, ...steps]))
         histories.set(req.conversationId, next)
         writeHistory(req.conversationId, next)
+        if (constructionActive) {
+          const report = await callEditorTool('get_video_construction', { limit: 1 })
+          const decision = constructionContinuation(report.isError ? null : report.structuredContent, constructionBatches, constructionProgress)
+          if (decision.continue && !controller.signal.aborted) {
+            constructionBatches++
+            constructionProgress = decision.progress
+            currentHistory = next
+            currentUser = { role: 'user', content: decision.reason }
+            carried = []
+            completed = []
+            emit({ type: 'status', message: `Continuing saved video construction (batch ${constructionBatches + 1}).` })
+            continue
+          }
+          if (report.isError || report.structuredContent?.status && !(report.structuredContent.status as { complete?: boolean }).complete) {
+            const message = report.isError ? 'Construction status could not be verified. Do not treat this run as a completed video.' : decision.reason
+            emit({ type: 'text', delta: `\n\n${message}` })
+          }
+        }
         emit({ type: 'done', usage })
         return
       } catch (err) {

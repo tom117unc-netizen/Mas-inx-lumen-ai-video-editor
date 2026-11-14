@@ -1,0 +1,11 @@
+# Contextual video construction
+
+Implement the accepted audit direction: make a coherent video from timeline footage by mapping permitted material, tracking audiovisual coverage, connecting story beats, investigating gaps, refining exact frame boundaries, and reviewing new joins and the whole output. Preserve the current editor and Context Bank APIs. Do not claim semantic understanding from loudness or metadata. Research is guidance, never proof of footage content.
+
+The first implementation uses a bounded, versioned construction record in the canonical .lumen project (so existing save/autosave/recovery carries it), with references to detailed Context Bank observations. It stores the original timeline snapshot identity, permitted source clips, coverage records, hierarchical beats and dependencies, protected moments, proposed removals, and review records. Edits invalidate stale plans rather than silently reinterpreting old times. Application uses the existing atomic batch/undo machinery. No new provider dependency; models use existing transcript, vision and research tools, with explicit uncertainty.
+
+Add adjacent-frame visual inspection with separately delivered high-resolution images, plus a bounded event-search helper with validated bisection preconditions. Precise refinement remains targeted rather than decoding four hours frame by frame. Add a combined cut-inspection tool returning actual rendered frames with transcript and audio metrics; it explicitly states metrics do not constitute listening.
+
+The default Copilot instructions direct full-video requests through this workflow and prohibit treating silence alone as a cut reason. Expose completion status explicitly; bounded model runs must signal unfinished work rather than claim editorial completion.
+
+Acceptance: unknown coverage blocks application; dependencies and protected visual pauses survive; malformed/stale/out-of-scope cuts are rejected; exact integer cuts apply atomically with undo; state survives project serialization; inspection maps frames accurately; review completion requires both local joins and whole-video context checks. Runtime perceptual quality on actual Windows footage remains a separate acceptance test.

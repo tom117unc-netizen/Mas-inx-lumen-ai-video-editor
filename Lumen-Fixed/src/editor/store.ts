@@ -397,3 +397,14 @@ export function recordAnimeReviewIdentity(projectId: string, showQuery: string, 
 /** Shorthand for non-React callers (keyboard shortcuts, AI agent, menus). */
 export const dispatch: EditorState['dispatch'] = (name, input, opts) => useEditor.getState().dispatch(name, input, opts)
 export const getProject = () => useEditor.getState().project
+
+/** Editorial working memory is project metadata: save/autosave it without
+ * inserting an undo step for every observation. Timeline edits remain undoable. */
+export function recordVideoConstruction(projectId: string, construction: import('./video-construction').ConstructionState) {
+  const state = useEditor.getState()
+  if (state.project.id !== projectId) throw new Error('Project changed during construction')
+  const [next] = produceWithPatches(state.project, draft => { draft.construction = structuredClone(construction) })
+  const version = state.version + 1
+  useEditor.setState({ project: next, version })
+  emitCommitted('dispatch', version)
+}
