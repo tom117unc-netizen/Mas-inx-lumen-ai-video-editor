@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createEmptyProject } from './new-project'
 import { createClip } from './defaults'
-import { beginConstruction, constructionStatus, constructionStorySignature, updateConstruction, validateConstructionCuts, nextEventProbe } from './video-construction'
+import { assertDiscoveryDecisionEvidence, beginConstruction, constructionStatus, constructionStorySignature, updateConstruction, validateConstructionCuts, nextEventProbe } from './video-construction'
 
 function fixture() {
   const p = createEmptyProject('Stream')
@@ -15,6 +15,7 @@ const receipt = {id:'receipt',start:0,end:600,frames:[0,100,200,300,400,500,599]
 const cut = {id:'cut',start:100,end:200,reason:'Repetitive walking',beatId:'scene',evidenceIds:['receipt'],audioReason:'No interrupted speech',visualReason:'No necessary action omitted'}
 function ready() {
   const p=fixture(); const s=beginConstruction(p,'Funny coherent stream edit')
+  s.discoveryRequired=false // Legacy-plan fixtures exercise the existing cut/context gates.
   s.inspections.push(receipt)
   const next=updateConstruction(s,{coverage:[coverage],beats:[beat('scene',0,600)],cuts:[cut]})
   next.contextInspections=[{cutId:'cut',storySignature:constructionStorySignature(next)}]
@@ -23,7 +24,7 @@ function ready() {
 describe('construction gates',()=>{
   it('starts with unknown coverage, survives JSON and directs investigation',()=>{
     const p=fixture(), s=JSON.parse(JSON.stringify(beginConstruction(p,'Story')))
-    expect(constructionStatus(p,s).stage).toBe('investigate')
+    expect(constructionStatus(p,s).stage).toBe('discover')
     expect(constructionStatus(p,s).uncovered).toEqual([{start:0,end:600}])
   })
   it('requires actual inspection receipts before accepting coverage',()=>{
@@ -129,4 +130,30 @@ it('requires full original-scope discovery if a scan has begun',()=>{
  s.discoveryScans=[{id:'partial',start:0,end:300,fingerprint:s.fingerprint,visualFrames:[0,60],audioMeasured:true,transcriptLines:0,eventCount:0}]
  expect(constructionStatus(p,s).stage).toBe('discover')
  expect(()=>validateConstructionCuts(p,s)).toThrow(/discovery scan/)
+})
+
+it('mandates complete candidate indexing on all newly started construction passes',()=>{
+ const {p,s}=ready()
+ s.discoveryRequired=true
+ s.inspections.push({id:'edges',start:99,end:202,frames:[99,100,101,199,200,201],audio:true,transcript:true})
+ s.cuts[0].evidenceIds.push('edges')
+ s.contextInspections=[{cutId:'cut',storySignature:constructionStorySignature(s)}]
+ expect(constructionStatus(p,s).stage).toBe('discover')
+ expect(()=>validateConstructionCuts(p,s)).toThrow(/discovery scan/i)
+ s.discoveryScans=[{id:'complete',start:0,end:600,fingerprint:s.fingerprint,visualFrames:[0,60,120],audioMeasured:true,transcriptLines:0,eventCount:0}]
+ expect(constructionStatus(p,s).stage).toBe('refine')
+ expect(validateConstructionCuts(p,s)).toHaveLength(1)
+})
+it('will not certify candidate discarding based on overview samples or missing visual trigger frames',()=>{
+ const p=fixture(),s=beginConstruction(p,'Story')
+ const event={id:'candidate',scanId:'scan',signal:'visual-change' as const,start:150,end:180,
+  strength:.8,description:'Sudden sampled visual transition',visualFrames:[165],transcriptClipIds:[],sourceClipIds:[]}
+ s.inspections.push({id:'overview',start:150,end:180,frames:[150,160,170,179],mode:'overview',audio:true,transcript:true})
+ expect(()=>assertDiscoveryDecisionEvidence(s,event,'discard',['overview'])).toThrow(/focused/i)
+ // Keeping the event is safe even with weaker evidence; deleting it is not.
+ expect(()=>assertDiscoveryDecisionEvidence(s,event,'keep',['overview'])).not.toThrow()
+ s.inspections.push({id:'dense',start:150,end:180,frames:[150,153,156,159,162,168,171,174,177,179],mode:'focused',audio:true,transcript:true})
+ expect(()=>assertDiscoveryDecisionEvidence(s,event,'discard',['dense'])).toThrow(/trigger frame 165/)
+ s.inspections.at(-1)!.frames.push(165)
+ expect(()=>assertDiscoveryDecisionEvidence(s,event,'discard',['dense'])).not.toThrow()
 })
