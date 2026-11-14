@@ -9,6 +9,7 @@ import { current, isDraft } from 'immer'
 import { uid } from '@/lib/id'
 import { cloneClip, clipEnd, splitClip } from './ops'
 import { speechCutContext } from './construction-context'
+import { mapNarrativeMoments, validateNarrativeStory, type MappedNarrativeMoment } from './construction-narrative'
 import { freshName } from './sequences'
 import type { Clip, Marker, Project, ProjectSettings, Sequence, Track } from './types'
 import type { ConstructionState, FrameRange } from './video-construction'
@@ -58,6 +59,7 @@ export interface SelectionOutputMap {
 export interface KeepFirstOutput {
   sequence:Sequence
   selections:SelectionOutputMap[]
+  moments:MappedNarrativeMoment[]
   clips:SourceClipMap[]
   joins:number[]
   outputFrames:number
@@ -151,6 +153,7 @@ export function validateKeepFirstSelections(p:Project,s:ConstructionState):Sourc
         throw new Error(`Required setup ${dependency} is absent or follows its dependent ${beat.id}`)
     }
   }
+  validateNarrativeStory(s,items)
   return items
 }
 /** Trim an exact subrange of one original clip. We reuse the SAME split maths
@@ -236,11 +239,18 @@ export function composeKeepFirstSequence(p:Project,s:ConstructionState,name='Lum
     cursor+=duration
   }
   if(!map.length)throw new Error('No source clips were assembled')
-  return {sequence:seq,selections:selectionMap,clips:map,joins,
+  return {sequence:seq,selections:selectionMap,moments:mapNarrativeMoments(s,items),clips:map,joins,
     outputFrames:cursor,originalFrames:s.scope.reduce((n,r)=>n+r.end-r.start,0)}
 }
 /** A source-map proves placement and identity, not semantic correctness. */
 export function validateOutputSourceMap(output:KeepFirstOutput,m:ImmutableSourceManifest) {
+  for(const moment of output.moments){
+    const region=output.selections.find(x=>x.selectionId===moment.selectionId)
+    if(!region || moment.sourceStart<region.sourceStart ||
+       moment.sourceEnd>region.sourceEnd ||
+       moment.outputStart!==region.outputStart+moment.sourceStart-region.sourceStart)
+      throw new Error('Narrative moment source-to-output mapping drifted')
+  }
   for(const region of output.selections){
     if(region.outputEnd-region.outputStart!==region.sourceEnd-region.sourceStart)
       throw new Error('Source-to-output selection duration mismatch')
@@ -293,6 +303,10 @@ export function auditPublishedAssembly(p:Project,s:ConstructionState){
  }
  if(nextFrame!==a.outputFrames)
    issues.push('Saved total output length differs from assembled selection boundaries')
+ const sourceEvidence={...s,inspections:s.sourceInspections??s.inspections} as ConstructionState
+ const currentMomentMap=mapNarrativeMoments(sourceEvidence,s.sourceSelections??[])
+ if(JSON.stringify(currentMomentMap)!==JSON.stringify(a.moments))
+   issues.push('Published output narrative moment occurrences disagree with the preserved source EDL')
  const clips=Object.values(p.clips)
  const known=new Set(a.clips.map(x=>x.outputClipId))
  for(const clip of clips)if(!known.has(clip.id))
