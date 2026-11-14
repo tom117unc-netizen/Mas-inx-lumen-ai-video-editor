@@ -4,6 +4,7 @@ import { assertDiscoveryDecisionEvidence, beginConstruction, constructionFingerp
 import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-event-index'
 import { nextContextInspectionProbe, planConstructionSections, selectBankContext } from '@/editor/construction-sections'
 import { auditPublishedAssembly, composeKeepFirstSequence, validateKeepFirstSelections, validateOutputSourceMap } from '@/editor/construction-assembler'
+import { validateNarrativeMoment } from '@/editor/construction-narrative'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
@@ -97,7 +98,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const pending=s.sections?.context.find(x=>!x.indexed)
       const sectionReceipts=pending?s.inspections.filter(i=>i.audio&&i.frames.length&&i.start<pending.end&&i.end>pending.start):[]
       const nextContextProbe=pending?nextContextInspectionProbe(pending,sectionReceipts,Math.round(s.fps*60)):null
-      return {goal:s.goal,fps:s.fps,revision:s.revision??0,source_manifest:s.sourceManifest?{sequence_id:s.sourceManifest.sequenceId,fingerprint:s.sourceManifest.fingerprint,source_clips:Object.keys(s.sourceManifest.clips).length}:null,sourceSelections:page(s.sourceSelections??[]),assembly:s.assembly?{sequence_id:s.assembly.sequenceId,source_sequence_id:s.assembly.sourceSequenceId,output_frames:s.assembly.outputFrames,selected_spans:page(s.assembly.selections),source_clips:page(s.assembly.clips)}:null,
+      return {goal:s.goal,fps:s.fps,revision:s.revision??0,source_manifest:s.sourceManifest?{sequence_id:s.sourceManifest.sequenceId,fingerprint:s.sourceManifest.fingerprint,source_clips:Object.keys(s.sourceManifest.clips).length}:null,sourceSelections:page(s.sourceSelections??[]),narrativeMoments:page(s.narrativeMoments??[]),assembly:s.assembly?{sequence_id:s.assembly.sequenceId,source_sequence_id:s.assembly.sourceSequenceId,output_frames:s.assembly.outputFrames,selected_spans:page(s.assembly.selections),mapped_moments:page(s.assembly.moments??[]),source_clips:page(s.assembly.clips)}:null,
         next_context_section:pending??null,
         next_context_probe:nextContextProbe?{section_id:pending!.id,...nextContextProbe}:null,
         next_context_inspection_ids:sectionReceipts.map(i=>i.id).slice(0,64),
@@ -517,6 +518,51 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     description:'Plan a frame-exact bisection probe for a single bracketed visual state change. First inspect both endpoints. Use only when the interval has one change; for repeats or unknown behaviour scan shorter windows instead. It plans the next frame and does not observe the event itself.',
     inputSchema:obj({left_frame:frame,right_frame:frame,left_present:bool('Observed state at left'),right_present:bool('Observed state at right'),single_change:bool('The inspected interval supports one change, not repeated appearances')},['left_frame','right_frame','left_present','right_present','single_change']),
     run:async a=>nextEventProbe(z.number().parse(a.left_frame),z.number().parse(a.right_frame),z.boolean().parse(a.left_present),z.boolean().parse(a.right_present),z.boolean().parse(a.single_change)),
+  },
+  {
+    name:'record_construction_narrative_moments',
+    description:'Build a durable, factual timeline of IMPORTANT story events and causal links from inspected original footage. Use after context banking to record challenge rules, round/night starts and endings, actual joke setups/payoffs, callbacks, discoveries, failures and reactions. Each event has exact source frames, inspector evidence, direct/uncertain confidence and explicit dependencies. Essential moments must survive the final EDL, and essential payoffs must follow their setup even if previewed earlier as a hook.',
+    inputSchema:obj({moments:list('Source-grounded narrative events with explicit relationships',obj({
+      id:str('Stable moment ID'),
+      start_frame:frame,end_frame:frame,
+      kind:oneOf('Verified moment type',['premise','rule','round-start','round-end','objective','discovery','joke-setup','joke-payoff','callback','reaction','failure','success','ending','other']),
+      importance:oneOf('Editorial importance',['essential','supporting','optional']),
+      confidence:oneOf('Direct evidence or remaining uncertainty',['observed','uncertain']),
+      description:str('Observed fact at this exact source interval; no invented game events',{minLength:15,maxLength:2000}),
+      inspection_ids:list('Actual original timeline audiovisual inspection receipts',str('Receipt ID'),{minItems:1,maxItems:40}),
+      links:list('Necessary causal/continuity links to other moment IDs',obj({
+        moment_id:str('Prior or related event ID'),relation:oneOf('Relationship',['requires','answers','consequence','callback']),
+      },['moment_id','relation']),{maxItems:15}),
+    },['id','start_frame','end_frame','kind','importance','confidence','description','inspection_ids','links']),{minItems:1,maxItems:20})},['moments']),
+    run:async args=>{
+      const stateBefore=state()
+      if(stateBefore.applied||stateBefore.paused||!stateBefore.sourceManifest)
+        throw new Error('Record original source narrative moments before publishing the output')
+      const schema=z.array(z.object({id:z.string().trim().min(1).max(128),
+        start_frame:z.number().int().nonnegative(),end_frame:z.number().int().positive(),
+        kind:z.enum(['premise','rule','round-start','round-end','objective','discovery','joke-setup','joke-payoff','callback','reaction','failure','success','ending','other']),
+        importance:z.enum(['essential','supporting','optional']),confidence:z.enum(['observed','uncertain']),
+        description:z.string().trim().min(15).max(2000),
+        inspection_ids:z.array(z.string().min(1)).min(1).max(40),
+        links:z.array(z.object({moment_id:z.string().min(1),relation:z.enum(['requires','answers','consequence','callback'])})).max(15),
+      })).min(1).max(20).parse(args.moments)
+      const out=new Map((stateBefore.narrativeMoments??[]).map(x=>[x.id,x]))
+      if(new Set(schema.map(x=>x.id)).size!==schema.length)throw new Error('Duplicate moment ID in one batch')
+      for(const item of schema){
+        const moment={id:item.id,start:item.start_frame,end:item.end_frame,kind:item.kind,
+          importance:item.importance,confidence:item.confidence,description:item.description,
+          evidenceIds:item.inspection_ids,links:item.links.map(link=>({
+            momentId:link.moment_id,relation:link.relation,
+          }))}
+        validateNarrativeMoment(stateBefore,moment)
+        out.set(moment.id,moment)
+      }
+      if(out.size>2500)throw new Error('Narrative memory budget exceeded; use shorter complete source episodes')
+      const changed=JSON.stringify([...out.values()])!==JSON.stringify(stateBefore.narrativeMoments??[])
+      if(changed){const next=structuredClone(stateBefore);next.narrativeMoments=[...out.values()];await persist(next)}
+      return {saved:changed,reused:!changed,total:out.size,
+        note:'Every entry is a model/inspector-grounded claim, not inferred from game research. Essential events and linked setups are mechanically protected by the keep-first EDL validator.'}
+    },
   },
   {
     name:'record_keep_first_selections',
