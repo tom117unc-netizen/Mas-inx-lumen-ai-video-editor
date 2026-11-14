@@ -21,9 +21,11 @@ export type FrameRange = z.infer<typeof range>
 export type StoryBeat = z.infer<typeof beatSchema>
 export type ConstructionCut = z.infer<typeof cutSchema>
 export interface InspectionReceipt extends FrameRange {id:string;frames:number[];audio:boolean;transcript:boolean}
+export interface ContextInspectionReceipt {cutId:string;storySignature:string}
 export interface ConstructionState {
   version:1; paused?:boolean; projectId:string;sequenceId:string;fingerprint:string;goal:string;fps:number;scope:FrameRange[];
   coverage:z.infer<typeof coverageSchema>[];beats:StoryBeat[];cuts:ConstructionCut[];inspections:InspectionReceipt[];
+  contextInspections?:ContextInspectionReceipt[];
   applied?:{fingerprint:string;joins:number[]};
   review?:{fingerprint:string;joins:number[];story:string;pacing:string;issues:string[]};
 }
@@ -44,6 +46,13 @@ export function constructionFingerprint(p:Project) {
     clips: p.clips, markers: p.markers, sequences: p.sequences, sequence: p.sequence,
     master: p.master, assets, luts: p.luts, fonts: p.fonts } as unknown as Project)
 }
+/** Invalidate earlier context reads whenever any cut or story dependency changes. */
+export function constructionStorySignature(s:ConstructionState) {
+  const data=JSON.stringify([s.fps,s.beats,s.cuts])
+  let hash=2166136261
+  for(let i=0;i<data.length;i++) hash=Math.imul(hash^data.charCodeAt(i),16777619)
+  return `${data.length}:${(hash>>>0).toString(16)}`
+}
 export function mergeRanges(ranges:FrameRange[]):FrameRange[] {
   const out:FrameRange[]=[]
   for(const r of [...ranges].sort((a,b)=>a.start-b.start)) {
@@ -60,7 +69,7 @@ export function beginConstruction(p:Project,goal:string):ConstructionState {
   const scope=mergeRanges(Object.values(p.clips).map(c=>({start:c.start,end:c.start+c.duration})))
   if(!scope.length) throw new Error('Put the permitted footage on the timeline first.')
   scope.forEach(r=>range.parse(r))
-  return {version:1,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[]}
+  return {version:1,projectId:p.id,sequenceId:p.sequence?.id??'main',fingerprint:constructionFingerprint(p),goal,fps:p.settings.fps,scope,coverage:[],beats:[],cuts:[],inspections:[],contextInspections:[]}
 }
 function assertFresh(p:Project,s:ConstructionState) {
   if(s.projectId!==p.id || s.sequenceId!==(p.sequence?.id??'main') || (s.applied?.fingerprint??s.fingerprint)!==constructionFingerprint(p)) throw new Error('Timeline changed: construction is stale. Re-map the current timeline before editing.')
@@ -106,6 +115,7 @@ function validateRecords(s:ConstructionState) {
     const receipts=evidence as InspectionReceipt[]
     if(!inside(c,mergeRanges(receipts.filter(i=>i.audio && i.frames.length).map(i=>({start:i.start,end:i.end}))))) throw new Error('Inspection must cover the range with both visual frames and audio analysis')
   }
+  if(s.contextInspections!==undefined) z.array(z.object({cutId:id,storySignature:id})).max(1000).parse(s.contextInspections)
   const sorted=[...s.cuts].sort((a,b)=>a.start-b.start)
   for(let i=1;i<sorted.length;i++) if(overlap(sorted[i-1],sorted[i])) throw new Error('Overlapping cuts')
 }
@@ -137,6 +147,8 @@ export function validateConstructionCuts(p:Project,s:ConstructionState):Construc
     for(const edge of [c.start,c.end]) for(const f of [edge-1,edge,edge+1]) {
       if(inside({start:f,end:f+1},s.scope) && !frames.has(f)) throw new Error(`Inspect adjacent frames at cut boundary ${edge}`)
     }
+    if(!s.contextInspections?.some(i=>i.cutId===c.id && i.storySignature===constructionStorySignature(s)))
+      throw new Error(`Inspect cross-scene context for cut ${c.id} after finalizing its story links and cut frames`)
   }
   return [...s.cuts].sort((a,b)=>b.start-a.start)
 }
