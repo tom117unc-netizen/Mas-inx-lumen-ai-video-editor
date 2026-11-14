@@ -23,8 +23,9 @@ interface Snapshot {
 const safeRange=(value:unknown):ShortRange|null=>{
   if(!value||typeof value!=='object')return null
   const r=value as Partial<ShortRange>
-  if(!Number.isSafeInteger(r.start)||!Number.isSafeInteger(r.end)||r.end!<=r.start!)return null
-  return {start:r.start!,end:r.end!}
+  const start=r.start, end=r.end
+  if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||end!<=start!)return null
+  return {start:start!,end:end!}
 }
 function stageOf(snapshot:Snapshot) {
   const stage=snapshot.status?.stage
@@ -86,7 +87,7 @@ function status(err:unknown):number|undefined{
 function signalCode(err:unknown):string{
   if(!err || typeof err!=='object')return ''
   const e=err as {code?:unknown;name?:unknown;message?:unknown;cause?:unknown}
-  return [e.code,e.name,e.message, e.cause&&signalCode(e.cause)]
+  return [e.code,e.name,e.message, e.cause&&e.cause!==err?signalCode(e.cause):'']
     .filter((x):x is string=>typeof x==='string').join(' ').slice(0,700)
 }
 /** Retry only transport/transient failures, never invalid tools, auth or saved
