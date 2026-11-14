@@ -44,6 +44,9 @@ export interface ConstructionSectionPlan {
 export interface ConstructionState {
   /** Deep source snapshot is never modified by an output edit or repair. */
   sourceManifest?:ImmutableSourceManifest
+  /** Keep the original inspector evidence separate from post-output inspections. */
+  sourceInspections?:InspectionReceipt[]
+  previousAssemblies?:{sequenceId:string;issues:string[];sourceFingerprint:string}[]
   /** Keep-first editable source selections, ordered as intended in the output. */
   sourceSelections?:SourceSelection[]
   /** Reversible source to output map for precise reconstruction and review. */
