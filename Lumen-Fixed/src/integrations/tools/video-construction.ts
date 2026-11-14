@@ -7,10 +7,11 @@ import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcript
 import { assessVideoQuality, defaultVideoBrief } from '@/editor/video-quality'
 import { assessJoinAudio } from '@/editor/construction-join-audio'
 import { prepareAudio, renderMix } from '@/engine/audio-engine'
+import { encodeWav } from '@/engine/wav'
 import { timelineStills, canvasBase64 } from '@/engine/stills'
 import { saveProject, useSession } from '@/project/session'
 import { INSPECT_TOOLS } from './inspect'
-import { bool, int, list, obj, oneOf, str, withImages, type AgentTool } from './kit'
+import { bool, int, list, obj, oneOf, str, withAudio, withImages, type AgentTool } from './kit'
 import { uid } from '@/lib/id'
 
 function state(fresh=true):ConstructionState {
@@ -27,6 +28,11 @@ async function persist(s:ConstructionState) {
 }
 const frame=int('Exact integer timeline frame, not seconds',{minimum:0})
 const rangeFields={start_frame:frame,end_frame:frame}
+function base64Bytes(bytes:Uint8Array) {
+  let binary=''
+  for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192))
+  return btoa(binary)
+}
 const evidence=list('Inspection receipt IDs returned by inspect_video_range',str('Receipt ID'),{minItems:1,maxItems:64})
 const span={start:frame,end:frame}
 const beat=obj({id:str('Stable ID'),...span,kind:oneOf('Story level',['chapter','scene','setup','payoff','reaction','callback','continuity']),summary:str('What happens and why it matters'),parentId:str('Optional containing chapter/scene ID'),dependsOn:list('Earlier essential beats this beat requires',str('Beat ID')),protectedRanges:list('Essential visual or audio moments that cuts must preserve',obj({...span,reason:str('Why this interval must survive')},['start','end','reason']))},['id','start','end','kind','summary'])
@@ -66,7 +72,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const s=state(false),offset=z.number().int().min(0).parse(a.offset??0),limit=z.number().int().min(1).max(100).parse(a.limit??40)
       const page=<T>(items:T[])=>({total:items.length,items:items.slice(offset,offset+limit),next_offset:offset+limit<items.length?offset+limit:null})
       const status=constructionStatus(getProject(),s)
-      return {goal:s.goal,fps:s.fps,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
+      return {goal:s.goal,fps:s.fps,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
     },
   },
   {
@@ -111,6 +117,63 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const receipt={id:uid('inspection'),start,end,frames,audio:true,transcript:transcript.length>0}
       const next=structuredClone(s);next.inspections.push(receipt);await persist(next)
       return withImages({inspection_id:receipt.id,frames,fps:p.settings.fps,start_frame:start,end_frame:end,mode,transcript,audio,audio_note:'Audio metrics are not listening: inspect transcript and visual action; mark delivery/game-sound interpretation uncertain unless directly supported.',coverage_note:mode==='overview'?'Sampled overview only. Investigate between samples for brief, silent or ambiguous events.':'Every frame in this short range is included.'},images.map(c=>({data:canvasBase64(c),mimeType:'image/jpeg' as const})))
+    },
+  },
+  {
+    name:'inspect_construction_audio',
+    description:'Capture up to 12 seconds of ACTUAL current timeline mix as a bounded WAV for a selected audio-capable model (Gemini). Use when judgement depends on laughter, delivery, music, or game sounds. Model interpretation is possible only if this WAV reaches an audio-capable model; text-only or unsupported models must not claim to have listened. Uses ONLY current timeline media and saves a source-range receipt.',
+    inputSchema:obj({...rangeFields,purpose:str('Which specific audio event or delivery question needs listening')},['start_frame','end_frame','purpose']),
+    run:async a=>{
+      const s=state(),p=getProject(),fingerprint=constructionFingerprint(p)
+      const start=z.number().int().nonnegative().parse(a.start_frame),end=z.number().int().min(start+1).parse(a.end_frame)
+      const purpose=z.string().trim().min(1).max(400).parse(a.purpose)
+      if(end-start>12*p.settings.fps)throw new Error('Audio listening is limited to 12 seconds per request; inspect a shorter window')
+      const permitted=s.applied?mergeRanges(Object.values(p.clips).map(c=>({start:c.start,end:c.start+c.duration}))):s.scope
+      if(!permitted.some(r=>start>=r.start&&end<=r.end))throw new Error('Audio capture outside permitted current timeline')
+      if((s.audioSamples?.length??0)>=300)throw new Error('Audio sample receipt budget reached')
+      await prepareAudio(p)
+      const mix=await renderMix(p,start/p.settings.fps,end/p.settings.fps,{sampleRate:24000})
+      const wav=encodeWav(mix),data=base64Bytes(wav)
+      if(data.length>4_000_000)throw new Error('Audio exceeds maximum inline payload; use a shorter range')
+      if(constructionFingerprint(getProject())!==fingerprint||getProject().construction!==s)
+        throw new Error('Timeline or construction changed while capturing audio; retry')
+      const sample={id:uid('audio_sample'),start,end,fingerprint,purpose}
+      const next=structuredClone(s);next.audioSamples=[...(next.audioSamples??[]),sample]
+      await persist(next)
+      return withAudio({audio_sample_id:sample.id,start_frame:start,end_frame:end,
+        start_seconds:start/p.settings.fps,end_seconds:end/p.settings.fps,purpose,
+        audio_format:'audio/wav',sample_rate:mix.sampleRate,channels:mix.numberOfChannels,
+        transcript:timelineTranscript(p,start/p.settings.fps,end/p.settings.fps).slice(0,80),
+        limitation:'The WAV carries real rendered audio, but this tool does not itself interpret it. Only an audio-capable receiving model can hear it. Audio cues, laughter, emotion and meaning still require cautious interpretation.'},
+        {data,mimeType:'audio/wav'})
+    },
+  },
+  {
+    name:'record_construction_audio_observation',
+    description:'Record an interpretation AFTER the supplied audio sample has actually been heard by a capable model (or assessed by a human). Distinguish audible cues from guesses, and state uncertainty. Do not call this for text-only agents that only see numeric metrics or transcripts.',
+    inputSchema:obj({sample_id:str('Exact captured audio sample receipt ID'),
+      event_type:oneOf('Observed kind',['speech_delivery','laughter','game_sound','music','silence','uncertain']),
+      summary:str('Short description of perceived sound, not a transcript prediction'),
+      audible_cues:str('Concrete acoustic evidence supporting that interpretation'),
+      confidence:oneOf('Confidence',['low','medium','high']),
+      uncertainty:str('What remains uncertain or ambiguous')},
+      ['sample_id','event_type','summary','audible_cues','confidence','uncertainty']),
+    run:async a=>{
+      const s=state(),p=getProject(),fingerprint=constructionFingerprint(p)
+      const raw=z.object({sample_id:z.string().trim().min(1).max(128),
+        event_type:z.enum(['speech_delivery','laughter','game_sound','music','silence','uncertain']),
+        summary:z.string().trim().min(1).max(2000),
+        audible_cues:z.string().trim().min(1).max(2000),
+        confidence:z.enum(['low','medium','high']),
+        uncertainty:z.string().trim().min(1).max(1500)}).parse(a)
+      const sample=s.audioSamples?.find(x=>x.id===raw.sample_id&&x.fingerprint===fingerprint)
+      if(!sample)throw new Error('Unknown or stale captured audio sample; inspect real current timeline audio first')
+      if((s.audioObservations?.length??0)>=600)throw new Error('Audio observation budget reached')
+      const observation={id:uid('audio_observation'),sampleId:sample.id,eventType:raw.event_type,
+        summary:raw.summary,audibleCues:raw.audible_cues,confidence:raw.confidence,uncertainty:raw.uncertainty}
+      const next=structuredClone(s);next.audioObservations=[...(next.audioObservations??[]),observation]
+      await persist(next)
+      return {saved:true,observation,note:'Model-reported perception, not objectively verified audio. Cross-check with video, context and any human review.'}
     },
   },
   {
