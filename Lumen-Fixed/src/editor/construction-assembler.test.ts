@@ -23,7 +23,7 @@ function ready(){
  const s=beginConstruction(p,'Build a coherent, funny stream story without losing the rules',true)
  s.discoveryScans=[{id:'scanned',start:0,end:300,fingerprint:s.fingerprint,
    visualFrames:[0,150,299],audioMeasured:true,transcriptLines:0,eventCount:0}]
- s.inspections=[{id:'whole',start:0,end:300,mode:'overview',frames:[0,10,70,89,90,91,180,204,205,206,244,245,246,260,299],
+ s.inspections=[{id:'whole',start:0,end:300,mode:'overview',frames:[0,1,10,70,89,90,91,179,180,181,204,205,206,244,245,246,260,299],
    audio:true,transcript:false}]
  s.coverage=[{id:'c',start:0,end:300,visual:'Checked source visuals',audio:'Examined source audio cues',evidenceIds:['whole']}]
  s.beats=[
@@ -92,6 +92,7 @@ describe('source-preserving keep-first editor',()=>{
    {id:'ending',role:'ending',beatId:'result',start:180,end:300,reason:'Outcome',evidenceIds:['whole']},
   ]
   expect(()=>validateKeepFirstSelections(p,s)).toThrow(/Required setup/)
+  s.inspections[0].frames.push(224,225,226)
   s.sourceSelections=[
    {id:'setup',role:'setup',beatId:'rules',start:0,end:90,reason:'Rules explained',evidenceIds:['whole']},
    {id:'ending',role:'ending',beatId:'result',start:225,end:300,reason:'Outcome',evidenceIds:['whole']},
