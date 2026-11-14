@@ -242,6 +242,7 @@ async function runModel(req: AgentRunRequest) {
     const audioSupported=canReceiveTimelineAudio(provider,modelId)
     let constructionActive=false
     const visionCache = new VisionEvidenceCache()
+    let activeBatchSignal:AbortSignal=controller.signal
     let analyserPromise: Promise<AgentVisualAnalyser | undefined> | undefined
     const getAnalyse: AgentVisualAnalyserFactory = () => {
       analyserPromise ??= (async () => {
@@ -257,17 +258,23 @@ async function runModel(req: AgentRunRequest) {
             pictures: sidecarPictures,
             cache: visionCache,
             run: async (messages) => {
+              const signal=activeBatchSignal
               const result = await generateText({
                 model: sidecar.model,
                 messages,
                 headers: sidecar.headers,
-                abortSignal: controller.signal,
+                abortSignal: signal,
               })
               return result.text
             },
           })
         return analyse
-      })().catch(() => undefined)
+      })().catch(() => {
+        // A transient sidecar deadline should not permanently disable visual
+        // inspection for the rest of a long construction run.
+        analyserPromise=undefined
+        return undefined
+      })
       return analyserPromise
     }
     const tools = buildTools(await editorTools(), pictures,audioSamples,audioSupported, () => ({ native, vision }), getAnalyse,
@@ -298,6 +305,7 @@ async function runModel(req: AgentRunRequest) {
       const deadline=new AbortController()
       const timer=setTimeout(()=>deadline.abort(new Error('Provider request exceeded its bounded execution window')),CONSTRUCTION_REQUEST_DEADLINE_MS)
       const requestSignal=AbortSignal.any([controller.signal,deadline.signal])
+      activeBatchSignal=requestSignal
       try {
         const effortOpts = effortSettings(api, effort)
         const result = streamText({
@@ -313,6 +321,9 @@ async function runModel(req: AgentRunRequest) {
           providerOptions: mergeOptions(effortOpts.providerOptions, thinkingOptions(api, modelId)) as ProviderOptions,
           stopWhen: ({ steps }) => steps.length >= (constructionActive ? CONSTRUCTION_MICRO_STEPS : MAX_STEPS),
           abortSignal: requestSignal,
+          // Outer retries re-check durable editor state before repeating work;
+          // avoid SDK retries that could make an interrupted call opaque.
+          maxRetries:constructionActive?0:1,
           prepareStep: ({ messages, responseMessages }) => {
             completed = responseMessages as ModelMessage[]
             if (native || (!vision && !audioSupported)) return undefined
