@@ -195,3 +195,31 @@ it('refuses to dismiss unexamined discovered events',async()=>{
    reason:'The event was not observed, so no decision is possible.',
    inspection_ids:[view.json.inspection_id]})).rejects.toThrow(/unknown/i)
 })
+
+it('prioritizes discovery risks and applies batch decisions atomically',async()=>{
+ const p=getProject(),clip=Object.values(p.clips)[0]
+ clip.assetId='dialogue'
+ p.assets.dialogue={id:'dialogue',name:'Talk',kind:'video',hasAudio:true,duration:10,addedAt:1,
+  source:{type:'file',url:'file://talk.mp4',fileName:'talk.mp4',mime:'video/mp4',size:1},
+  transcript:[{start:6,end:7,text:'I cannot believe that just happened'}]}
+ useEditor.getState().loadProject(p)
+ await run('begin_video_construction',{goal:'Protect late dialogue and gameplay changes'})
+ const scan=await run('scan_construction_events',{start_frame:0,end_frame:300}) as any
+ const visual=scan.candidates.find((e:any)=>e.signal==='visual-change')
+ const speech=scan.candidates.find((e:any)=>e.signal==='speech')
+ expect(visual).toBeDefined();expect(speech).toBeDefined()
+ const queue=await run('get_discovery_queue',{limit:10}) as any
+ expect(queue.total).toBeGreaterThanOrEqual(2)
+ expect(queue.items[0].signal).toBe('visual-change')
+ const a=await run('inspect_video_range',{start_frame:visual.start,end_frame:visual.end,mode:'overview'}) as any
+ const b=await run('inspect_video_range',{start_frame:speech.start,end_frame:speech.end,mode:'overview'}) as any
+ const decisions=[
+ {event_id:visual.id,decision:'keep',reason:'Observed the game scene changes in the rendered visual sequence.',inspection_ids:[a.json.inspection_id]},
+ {event_id:speech.id,decision:'discard',reason:'Inspected the particular line; it is redundant for this intended edit.',inspection_ids:[b.json.inspection_id]},
+ ]
+ await expect(run('review_discovered_events',{decisions:[decisions[0],{...decisions[1],inspection_ids:[]}]})).rejects.toThrow(/inspection/)
+ expect(getProject().construction?.discoveryEvents?.find(e=>e.id===visual.id)?.decision).toBeUndefined()
+ expect(await run('review_discovered_events',{decisions})).toMatchObject({saved:true,reviewed:[visual.id,speech.id]})
+ const pending=await run('get_discovery_queue') as any
+ expect(pending.items.some((e:any)=>e.id===visual.id||e.id===speech.id)).toBe(false)
+})
