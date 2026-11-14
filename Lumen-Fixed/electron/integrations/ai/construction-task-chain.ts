@@ -72,7 +72,7 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   }
   return [
     'LUMEN AUTONOMOUS VIDEO CONSTRUCTION — NEXT SMALL VERIFIED STEP',
-    `Goal: ${brief(s.goal,500)||'Use the saved project goal'}`,
+    `Goal: ${brief(s.goal,2000)||'Use the saved project goal'}`,
     `Saved state: stage=${stage}; revision=${count(s.revision)}; fps=${fps}; discovery scans=${count(s.discoveryScans?.total)}; candidates=${count(s.discoveryEvents?.total)}; pending candidates=${count(s.discoveryPending)}; beats=${count(s.beats?.total)}; proposed cuts=${count(s.cuts?.total)}.`,
     recovery?`Recovery: ${brief(recovery,250)}. The previous request may have partially executed. Re-read saved state; do NOT replay unverified edits.`:'',
     `Task: ${task}`,
