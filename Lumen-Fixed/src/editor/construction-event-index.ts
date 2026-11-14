@@ -54,8 +54,8 @@ function joinNearby(events:SignalCandidate[],gapFrames:number) {
     if(prev && prev.signal===e.signal && e.start<=prev.end+gapFrames){
       prev.end=Math.max(prev.end,e.end)
       prev.strength=Math.max(prev.strength,e.strength)
-      prev.visualFrames=[...new Set([...prev.visualFrames,...e.visualFrames])].slice(0,16)
-      prev.transcriptClipIds=[...new Set([...prev.transcriptClipIds,...e.transcriptClipIds])].slice(0,16)
+      prev.visualFrames=[...new Set([...prev.visualFrames,...e.visualFrames])]
+      prev.transcriptClipIds=[...new Set([...prev.transcriptClipIds,...e.transcriptClipIds])]
       if(prev.description.length<350)prev.description=(prev.description+' | '+e.description).slice(0,350)
     } else out.push({...e})
   }
@@ -79,7 +79,7 @@ export function discoverTimelineEvents(input:EventScanInput):SignalCandidate[]{
   const baseline=median(visuals.map(v=>v.score))
   const chosen=visuals.filter((v,i)=>i>0 && v.score>=Math.max(13,baseline*1.8) &&
     v.score>=Math.max(visuals[i-1]?.score??0,visuals[i+1]?.score??0))
-    .sort((a,b)=>b.score-a.score).slice(0,20)
+    .sort((a,b)=>b.score-a.score)
   for(const v of chosen){
     const r=range(v.frame-padding,v.frame+padding,input)
     events.push({signal:'visual-change',...r,strength:Math.min(1,v.score/80),
@@ -99,7 +99,7 @@ export function discoverTimelineEvents(input:EventScanInput):SignalCandidate[]{
       description:onset?'Sudden audible level increase; may be speech, music or gameplay sound':'Abrupt level drop; may mark a pause, stop or transition',
       visualFrames:[],transcriptClipIds:[]})
   }
-  for(const f of [...new Set(input.boundaries)].filter(f=>f>start&&f<end).slice(0,50)){
+  for(const f of [...new Set(input.boundaries)].filter(f=>f>start&&f<end)){
     const r=range(f-padding,f+padding,input)
     events.push({signal:'clip-boundary',...r,strength:.5,description:'Existing timeline clip boundary; check scene/round continuity',
       visualFrames:[],transcriptClipIds:[]})
@@ -109,5 +109,5 @@ export function discoverTimelineEvents(input:EventScanInput):SignalCandidate[]{
     const gap=signal==='speech'?Math.round(fps*.55):signal==='clip-boundary'?0:Math.round(fps*.4)
     grouped.push(...joinNearby(events.filter(e=>e.signal===signal),gap))
   }
-  return grouped.sort((a,b)=>a.start-b.start||b.strength-a.strength).slice(0,140)
+  return grouped.sort((a,b)=>a.start-b.start||b.strength-a.strength)
 }
