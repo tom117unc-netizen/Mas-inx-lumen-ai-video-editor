@@ -20,6 +20,7 @@ export interface SourceSelection extends FrameRange {
   beatId:string
   reason:string
   evidenceIds:string[]
+  outputOrder?:number
 }
 export interface ImmutableSourceManifest {
   fingerprint:string
