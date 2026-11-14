@@ -462,3 +462,27 @@ it('repairs a failed output by reopening the unchanged original and preserving b
  expect(getProject().sequences?.[firstId]).toBeTruthy()
  expect(getProject().sequences?.[originalId].clips).toEqual(originalClips)
 })
+
+it('banks verified narrative moments with causal links without inflating repeat progress',async()=>{
+ await run('begin_video_construction',{goal:'Keep the actual challenge rules and payoff in the narrative'})
+ const inspection=await run('inspect_video_range',{start_frame:0,end_frame:300,mode:'overview'}) as any
+ const moments=[
+  {id:'rule',start_frame:10,end_frame:20,kind:'rule',importance:'essential',confidence:'observed',
+   description:'The actual inspected opening declares a specific challenge rule',
+   inspection_ids:[inspection.json.inspection_id],links:[]},
+  {id:'payoff',start_frame:200,end_frame:210,kind:'joke-payoff',importance:'essential',confidence:'observed',
+   description:'The inspected scene contains the actual result of the earlier setup',
+   inspection_ids:[inspection.json.inspection_id],links:[{moment_id:'rule',relation:'requires'}]},
+ ]
+ const first=await run('record_construction_narrative_moments',{moments}) as any
+ expect(first).toMatchObject({saved:true,total:2})
+ const oldRevision=(await run('get_video_construction') as any).revision
+ expect(await run('record_construction_narrative_moments',{moments})).toMatchObject({saved:false,reused:true,total:2})
+ const snapshot=await run('get_video_construction') as any
+ expect(snapshot.revision).toBe(oldRevision)
+ expect(snapshot.narrativeMoments.total).toBe(2)
+ expect(snapshot.narrativeMoments.items[1].links).toEqual([{momentId:'rule',relation:'requires'}])
+ await expect(run('record_construction_narrative_moments',{moments:[{
+   ...moments[0],id:'uncertain',confidence:'uncertain',kind:'round-start',
+ }]})).rejects.toThrow(/uncertain/i)
+})
