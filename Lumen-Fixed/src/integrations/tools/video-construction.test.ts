@@ -377,6 +377,40 @@ it('requires the full context pass first, then reuses identical global-bank look
    inspection_ids:[overview.json.inspection_id]})).rejects.toThrow(/story beat/i)
 })
 
+it('auditions the actual source PCM between two selected moments BEFORE publishing',async()=>{
+ await run('begin_video_construction',{goal:'Make a short video with clear original setup and ending'})
+ await run('scan_construction_events',{start_frame:0,end_frame:300})
+ const overview=await run('inspect_video_range',{start_frame:0,end_frame:300,mode:'overview'}) as any
+ const begin=await run('inspect_video_range',{start_frame:0,end_frame:3,mode:'boundary'}) as any
+ const middle=await run('inspect_video_range',{start_frame:148,end_frame:152,mode:'boundary'}) as any
+ const finish=await run('inspect_video_range',{start_frame:297,end_frame:300,mode:'boundary'}) as any
+ await run('update_video_construction',{beats:[
+  {id:'beginning',start:0,end:150,kind:'scene',summary:'Challenge explanation and first section'},
+  {id:'ending',start:150,end:300,kind:'scene',summary:'Second section and final result'}]})
+ await completeTwoPassSections(overview.json.inspection_id)
+ const inspection_ids=[overview.json.inspection_id,begin.json.inspection_id,
+  middle.json.inspection_id,finish.json.inspection_id]
+ await run('record_keep_first_selections',{selections:[
+  {id:'source-a',start_frame:0,end_frame:150,output_order:0,role:'setup',beat_id:'beginning',
+    reason:'Retain the original challenge explanation.',inspection_ids},
+  {id:'source-b',start_frame:150,end_frame:300,output_order:1,role:'ending',beat_id:'ending',
+    reason:'Retain the original result and ending.',inspection_ids},
+ ]})
+ await expect(run('inspect_keep_first_join_audio',{join_index:1})).rejects.toThrow(/join/i)
+ const before=await run('preview_keep_first_assembly') as any
+ expect(before.audio_preflight).toMatchObject([{join_index:0,inspected:false}])
+ audioMock.click=true
+ const audition=await run('inspect_keep_first_join_audio',{join_index:0}) as any
+ expect(audition.audio).toMatchObject({mimeType:'audio/wav'})
+ expect(audition.json).toMatchObject({join_index:0,output_join_frame:150,saved:true})
+ expect(audition.json.report.flags).toContain('possible-click')
+ expect(getProject().construction?.spliceAudioChecks).toHaveLength(1)
+ const preview=await run('preview_keep_first_assembly') as any
+ expect(preview.audio_preflight).toMatchObject([{join_index:0,inspected:true}])
+ expect(preview.audio_preflight[0].report.flags).toContain('possible-click')
+ expect(getProject().sequence?.id).not.toEqual('new-video')
+})
+
 it('publishes an independently editable output sequence without changing the original footage',async()=>{
  await run('begin_video_construction',{goal:'Turn all permitted original gameplay into an editable source-backed narrative cut'})
  const clip=Object.values(getProject().clips)[0]
