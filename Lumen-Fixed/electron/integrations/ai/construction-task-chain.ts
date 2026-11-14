@@ -91,7 +91,7 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   } else if(stage==='review'){
     task=reviewIssues.length
       ?`A completed review found a real defect: ${reviewIssues.map(x=>brief(x,180)).join(' | ')}. ${s.assembly?'Use reopen_construction_source_for_repair to restore the intact original timeline, saved evidence and all source selections, then revise ONLY the failed moments and rebuild a new output version.':'For legacy destructive output, use begin_construction_repair on the current timeline without claiming omitted footage can be restored.'} Never mark the video complete until actual output evidence and review checks pass.`
-      :'Inspect ONE unfinished edited join or a short part of the actual output, including mixed audio. Record grounded evidence; finalize review only after every join and required story section has been checked.'
+      :'INDEPENDENT OUTPUT CRITIC: call audit_output_narrative first. Work on ONE missing or unverified essential output moment or join from its returned issues, and inspect the ACTUAL edited output with pictures and real mixed audio, not the original source and not a self-attested story summary. Repair the specific missing rule, round outcome, setup/payoff or callback with source-backed restoration when needed. Only call review_video_construction once all required moments and joins have evidence; structural audit failures are mandatory issues.'
   } else {
     task='Read get_video_construction and report the unresolved blocker; do not repeat destructive actions.'
   }
