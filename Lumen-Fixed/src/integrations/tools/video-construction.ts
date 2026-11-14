@@ -5,6 +5,7 @@ import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-ev
 import { nextContextInspectionProbe, planConstructionSections, selectBankContext } from '@/editor/construction-sections'
 import { auditPublishedAssembly, composeKeepFirstSequence, validateKeepFirstSelections, validateOutputSourceMap } from '@/editor/construction-assembler'
 import { validateNarrativeMoment } from '@/editor/construction-narrative'
+import { constructionIndexProgress, pauseConstructionIndexJob, startConstructionIndexJob } from './construction-index-worker'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
@@ -73,7 +74,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
     name:'pause_video_construction',
     description:'Pause construction and release its AI editing safeguards while preserving the story map and progress. Ordinary edits are then allowed; changes to the timeline will make the old plan stale.',
     inputSchema:obj({}),
-    run:async()=>{ const s=structuredClone(state(false));s.paused=true;await persist(s);return {paused:true,saved:true} },
+    run:async()=>{ pauseConstructionIndexJob();const s=structuredClone(state(false));s.paused=true;await persist(s);return {paused:true,saved:true} },
   },
 
   {
@@ -98,7 +99,7 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const pending=s.sections?.context.find(x=>!x.indexed)
       const sectionReceipts=pending?s.inspections.filter(i=>i.audio&&i.frames.length&&i.start<pending.end&&i.end>pending.start):[]
       const nextContextProbe=pending?nextContextInspectionProbe(pending,sectionReceipts,Math.round(s.fps*60)):null
-      return {goal:s.goal,fps:s.fps,revision:s.revision??0,source_manifest:s.sourceManifest?{sequence_id:s.sourceManifest.sequenceId,fingerprint:s.sourceManifest.fingerprint,source_clips:Object.keys(s.sourceManifest.clips).length}:null,sourceSelections:page(s.sourceSelections??[]),narrativeMoments:page(s.narrativeMoments??[]),assembly:s.assembly?{sequence_id:s.assembly.sequenceId,source_sequence_id:s.assembly.sourceSequenceId,output_frames:s.assembly.outputFrames,selected_spans:page(s.assembly.selections),mapped_moments:page(s.assembly.moments??[]),source_clips:page(s.assembly.clips)}:null,
+      return {goal:s.goal,fps:s.fps,revision:s.revision??0,indexing:constructionIndexProgress(s),source_manifest:s.sourceManifest?{sequence_id:s.sourceManifest.sequenceId,fingerprint:s.sourceManifest.fingerprint,source_clips:Object.keys(s.sourceManifest.clips).length}:null,sourceSelections:page(s.sourceSelections??[]),narrativeMoments:page(s.narrativeMoments??[]),assembly:s.assembly?{sequence_id:s.assembly.sequenceId,source_sequence_id:s.assembly.sourceSequenceId,output_frames:s.assembly.outputFrames,selected_spans:page(s.assembly.selections),mapped_moments:page(s.assembly.moments??[]),source_clips:page(s.assembly.clips)}:null,
         next_context_section:pending??null,
         next_context_probe:nextContextProbe?{section_id:pending!.id,...nextContextProbe}:null,
         next_context_inspection_ids:sectionReceipts.map(i=>i.id).slice(0,64),
@@ -272,6 +273,34 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const next=structuredClone(s);next.inspections.push(receipt);await persist(next)
       return withImages({inspection_id:receipt.id,frames,fps:p.settings.fps,start_frame:start,end_frame:end,mode,transcript,audio,audio_note:'Audio metrics are not listening: inspect transcript and visual action; mark delivery/game-sound interpretation uncertain unless directly supported.',coverage_note:mode==='overview'?'Sampled overview only; it cannot justify discarding events.':mode==='focused'?'Denser sample of a short interval, including exact requested triggers. It is still not continuous viewing.':'Every frame in this short range is included.'},images.map(c=>({data:canvasBase64(c),mimeType:'image/jpeg' as const})))
     },
+  },
+  {
+    name:'start_construction_indexing',
+    description:'Start or resume ONE LOCAL whole-timeline index job. It autonomously scans the entire authorised source timeline in bounded chunks, persists event/scan checkpoints after EACH chunk, and chooses smaller chunks when candidate density is high. The model does NOT need to call scan_construction_events for each minute. The job runs in Lumen while the project stays open and can be stopped by pause_construction_indexing. Get progress with get_construction_indexing. This is candidate indexing only, NOT semantic audiovisual understanding.',
+    inputSchema:obj({}),
+    run:async()=>{
+      const s=state()
+      if(missingTimelineTranscripts(getProject()).length)
+        throw new Error('Transcribe all audible original timeline media before starting a whole-video index job; do not treat missing transcripts as silence.')
+      const scanTool=VIDEO_CONSTRUCTION_TOOLS.find(t=>t.name==='scan_construction_events')!
+      const status=startConstructionIndexJob(s,async(start,end)=>{
+        const result=await scanTool.run({start_frame:start,end_frame:end})
+        return result as {candidates?:unknown[]}
+      })
+      return {indexing:status,next:'Indexing proceeds locally while Lumen stays open. Inspect get_construction_indexing to view progress. Only complete indexed coverage authorizes the context-bank pass.'}
+    },
+  },
+  {
+    name:'get_construction_indexing',
+    description:'Read exact currently saved indexing coverage (frames, events, remaining range) and local job state. After a restart there may be no active worker, but partial progress is saved and start_construction_indexing will resume the remaining ranges.',
+    inputSchema:obj({}),
+    run:async()=>({indexing:constructionIndexProgress(state(false))}),
+  },
+  {
+    name:'pause_construction_indexing',
+    description:'Request safe cancellation of LOCAL background indexing. A chunk already rendering may finish before the job pauses. Its durable saved scans remain intact for later resumption. Does not pause the overall story construction unless pause_video_construction is also requested.',
+    inputSchema:obj({}),
+    run:async()=>({state:pauseConstructionIndexJob(),indexing:constructionIndexProgress(state(false))}),
   },
   {
     name:'scan_construction_events',
