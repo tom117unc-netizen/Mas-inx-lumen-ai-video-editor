@@ -33,6 +33,8 @@ it('blocks unsampled cuts and applies verified cuts in one undo step',async()=>{
  const last=await run('inspect_video_range',{start_frame:199,end_frame:202,mode:'boundary'}) as any
  await run('update_video_construction',{coverage:[{id:'all',start:0,end:300,visual:'Checked footage',audio:'Checked sound context',evidenceIds:[scan.json.inspection_id]}],beats:[{id:'scene',start:0,end:300,kind:'scene',summary:'Approach and reaction',dependsOn:[],protectedRanges:[]}],cuts:[{id:'cut',start:100,end:200,beatId:'scene',reason:'Repeated waiting',visualReason:'No new action',audioReason:'No line lost',evidenceIds:[scan.json.inspection_id,first.json.inspection_id,last.json.inspection_id]}]})
  const before=structuredClone(getProject().clips),undo=useEditor.getState().past.length
+ await expect(run('apply_video_construction')).rejects.toThrow(/context/i)
+ expect(await run('inspect_cut_context',{cut_id:'cut'})).toMatchObject({recorded:true})
  expect(await run('apply_video_construction')).toMatchObject({applied:true,joins:[100]})
  expect(Math.max(...Object.values(getProject().clips).map(c=>c.start+c.duration))).toBe(200)
  expect(useEditor.getState().past).toHaveLength(undo+1)
@@ -58,12 +60,30 @@ it('requires actual output inspection before recording a successful review',asyn
   const r=await run('inspect_video_range',{start_frame:start,end_frame:end,mode}) as any;ids.push(r.json.inspection_id)
  }
  await run('update_video_construction',{coverage:[{id:'all',start:0,end:300,visual:'Checked',audio:'Checked',evidenceIds:[ids[0]]}],beats:[{id:'scene',start:0,end:300,kind:'scene',summary:'Scene'}],cuts:[{id:'c',start:100,end:200,beatId:'scene',reason:'Repeated action',audioReason:'No line lost',visualReason:'No action lost',evidenceIds:ids}]})
+ await run('inspect_cut_context',{cut_id:'c'})
  await run('apply_video_construction')
  await expect(run('review_video_construction',{story:'Clear',pacing:'Good',issues:[]})).rejects.toThrow(/whole output/i)
  await run('inspect_video_range',{start_frame:0,end_frame:200,mode:'overview'})
  await expect(run('review_video_construction',{story:'Clear',pacing:'Good',issues:[]})).rejects.toThrow(/join/i)
  await run('inspect_video_range',{start_frame:99,end_frame:102,mode:'boundary'})
  expect(await run('review_video_construction',{story:'Setup and payoff remain',pacing:'Waiting shortened without losing reaction',issues:[]})).toMatchObject({status:{complete:true}})
+})
+it('reports an unsafe cut through available speech instead of issuing a receipt',async()=>{
+ const p=createEmptyProject('Dialogue')
+ const c=createClip({kind:'video',trackId:p.tracks[0].id,start:0,duration:300,assetId:'source'})
+ p.clips[c.id]=c
+ p.assets.source={id:'source',name:'Stream',kind:'video',hasAudio:true,duration:10,addedAt:1,
+   source:{type:'file',url:'file://stream.mp4',mime:'video/mp4',size:1},
+   transcript:[{start:4.5,end:6.5,text:'Wait I have a plan'}]}
+ useEditor.getState().loadProject(p)
+ await run('begin_video_construction',{goal:'Story'})
+ const scan=await run('inspect_video_range',{start_frame:0,end_frame:300,mode:'overview'}) as any
+ await run('update_video_construction',{beats:[{id:'scene',start:0,end:300,kind:'scene',summary:'One conversation'}],
+  cuts:[{id:'speech',start:160,end:190,beatId:'scene',reason:'Tighten',audioReason:'Unknown',visualReason:'Unknown',evidenceIds:[scan.json.inspection_id]}]})
+ const report=await run('inspect_cut_context',{cut_id:'speech'}) as any
+ expect(report.recorded).toBe(false)
+ expect(report.speech.violations.map((v:any)=>v.edge)).toEqual(['start','end'])
+ expect(getProject().construction?.contextInspections).toEqual([])
 })
 it('supports explicit pause and resume without discarding the story map',async()=>{
  await run('begin_video_construction',{goal:'Story'})
