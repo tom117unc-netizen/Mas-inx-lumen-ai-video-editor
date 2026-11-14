@@ -486,3 +486,32 @@ it('banks verified narrative moments with causal links without inflating repeat 
    ...moments[0],id:'uncertain',confidence:'uncertain',kind:'round-start',
  }]})).rejects.toThrow(/uncertain/i)
 })
+
+it('retains semantic interpretations only after real focused source inspection',async()=>{
+ await run('begin_video_construction',{goal:'Identify scene changes without inventing gameplay'})
+ const scan=await run('scan_construction_events',{start_frame:0,end_frame:300}) as any
+ const candidate=scan.candidates.find((e:any)=>e.signal==='visual-change')
+ expect(candidate).toBeDefined()
+ const queue=await run('get_event_investigation_queue',{limit:15}) as any
+ expect(queue.items.some((e:any)=>e.id===candidate.id)).toBe(true)
+ const overview=await run('inspect_video_range',{start_frame:candidate.start,end_frame:candidate.end,mode:'overview'}) as any
+ const fact={event_id:candidate.id,kind:'scene-change',confidence:'observed',
+   summary:'The supplied test images change from dark to bright at the sampled scene edge.',
+   inspection_ids:[overview.json.inspection_id],uncertainty:'Image difference alone cannot establish specific game events.'}
+ await expect(run('record_construction_event_findings',{findings:[fact]}))
+   .rejects.toThrow(/focused|frame-by-frame/i)
+ const observed=await run('inspect_video_range',{start_frame:candidate.start,end_frame:candidate.end,
+   mode:'focused',priority_frames:candidate.visualFrames.filter((f:number)=>f>=candidate.start&&f<candidate.end)}) as any
+ const grounded={...fact,inspection_ids:[observed.json.inspection_id]}
+ expect(await run('record_construction_event_findings',{findings:[grounded]}))
+   .toMatchObject({saved:true,interpreted:1})
+ expect(await run('record_construction_event_findings',{findings:[grounded]}))
+   .toMatchObject({saved:false,reused:true})
+ const report=await run('get_video_construction') as any
+ expect(report.eventFindings.total).toBe(1)
+ expect(report.eventFindings.items[0].eventId).toBe(candidate.id)
+ expect(report.pendingEventInvestigations.some((e:any)=>e.id===candidate.id)).toBe(false)
+ await expect(run('record_construction_event_findings',{findings:[{...grounded,
+   kind:'laughter',summary:'Loud audio must not automatically count as a person laughing.'}]}))
+   .rejects.toThrow(/real-audio listening/i)
+})
