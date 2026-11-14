@@ -1,8 +1,8 @@
 /** A stateful editorial workflow over the existing frame-based editor. */
 import { z } from 'zod'
-import { assertDiscoveryDecisionEvidence, beginConstruction, constructionFingerprint, constructionStatus, constructionStorySignature, mergeRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
+import { assertDiscoveryDecisionEvidence, beginConstruction, constructionFingerprint, constructionStatus, constructionStorySignature, mergeRanges, unscannedDiscoveryRanges, nextEventProbe, updateConstruction, validateConstructionCuts, type ConstructionState } from '@/editor/video-construction'
 import { audioIndexBins, discoverTimelineEvents } from '@/editor/construction-event-index'
-import { selectBankContext } from '@/editor/construction-sections'
+import { planConstructionSections, selectBankContext } from '@/editor/construction-sections'
 import { dispatch, getProject, recordVideoConstruction, rollbackTo, savepoint, useEditor } from '@/editor/store'
 import { timelineTranscript, untranscribed } from '@/editor/smart'
 import { assertSpeechSafeCuts, relatedStoryContext, speechCutContext, transcriptCallbackCandidates } from '@/editor/construction-context'
@@ -93,7 +93,10 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const s=state(false),offset=z.number().int().min(0).parse(a.offset??0),limit=z.number().int().min(1).max(100).parse(a.limit??40)
       const page=<T>(items:T[])=>({total:items.length,items:items.slice(offset,offset+limit),next_offset:offset+limit<items.length?offset+limit:null})
       const status=constructionStatus(getProject(),s)
-      return {goal:s.goal,fps:s.fps,revision:s.revision??0,sectionPlan:s.sections?{context_target_frames:s.sections.contextTargetFrames,edit_target_frames:s.sections.editTargetFrames,context:page(s.sections.context),editing:page(s.sections.editing),pending_context:s.sections.context.filter(x=>!x.indexed).length,pending_editing:s.sections.editing.filter(x=>!x.planned).length}:undefined,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
+      return {goal:s.goal,fps:s.fps,revision:s.revision??0,
+        next_context_section:s.sections?.context.find(x=>!x.indexed)??null,
+        next_edit_section:s.sections?.editing.find(x=>!x.planned)??null,
+        sectionPlan:s.sections?{context_target_frames:s.sections.contextTargetFrames,edit_target_frames:s.sections.editTargetFrames,context:page(s.sections.context),editing:page(s.sections.editing),pending_context:s.sections.context.filter(x=>!x.indexed).length,pending_editing:s.sections.editing.filter(x=>!x.planned).length}:undefined,missing_timeline_transcripts:missingTimelineTranscripts(getProject()),discovery_required:s.discoveryRequired===true,status:{...status,uncovered:status.uncovered.slice(0,100),uncovered_count:status.uncovered.length},scope:page(s.scope),beats:page(s.beats),coverage:page(s.coverage),cuts:page(s.cuts),inspections:page(s.inspections),contextInspections:page(s.contextInspections??[]),discoveryScans:page(s.discoveryScans??[]),discoveryEvents:page(s.discoveryEvents??[]),discoveryPending:(s.discoveryEvents??[]).filter(e=>!e.decision||e.decision==='uncertain').length,audioSamples:page(s.audioSamples??[]),audioObservations:page(s.audioObservations??[]),joinAudioChecks:page(s.joinAudioChecks??[]),repairOf:s.repairOf,applied:s.applied,review:s.review}
     },
   },
   {
@@ -301,6 +304,17 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const scan={id:scanId,start,end,fingerprint,visualFrames:frames,audioMeasured:true,transcriptLines:speech.length,eventCount:events.length}
       const next=structuredClone(s);next.discoveryScans=[...(next.discoveryScans??[]),scan]
       next.discoveryEvents=[...(next.discoveryEvents??[]),...events]
+      if(next.sections && !unscannedDiscoveryRanges(next).length) {
+        // The global bank has not begun yet. Repartition from measured candidate
+        // boundaries before any context summary or local editing decision exists.
+        const hints=next.discoveryEvents!.map(e=>({start:e.start,end:e.end,kind:e.signal,strength:e.strength}))
+        const schedule=planConstructionSections(next.scope,next.fps,hints)
+        next.sections={
+          originalFrames:schedule.totalFrames,
+          contextTargetFrames:schedule.contextTargetFrames,editTargetFrames:schedule.editTargetFrames,
+          context:schedule.context,editing:schedule.editing,reads:[],
+        }
+      }
       await persist(next)
       return {scan_id:scanId,start_frame:start,end_frame:end,visual_samples:frames.length,
         audio_metric_bins:Math.round(mix.duration/.2),transcript_lines:speech.length,
