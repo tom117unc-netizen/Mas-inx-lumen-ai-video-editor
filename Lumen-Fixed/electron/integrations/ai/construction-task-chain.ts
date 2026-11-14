@@ -45,6 +45,8 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
   const uncovered=Array.isArray(s.status?.uncovered)?s.status.uncovered.map(safeRange).filter((x):x is ShortRange=>!!x):[]
   const fps=Number(s.fps)>0&&Number(s.fps)<=240?Number(s.fps):30
   const first=uncovered[0]
+  const reviewIssues=(s.review&&typeof s.review==='object'&&Array.isArray((s.review as {issues?:unknown}).issues))
+    ?(s.review as {issues:string[]}).issues.filter(x=>typeof x==='string').slice(0,3):[]
   const bounded=first?{start:first.start,end:Math.min(first.end,first.start+Math.round(fps*60))}:null
   let task:string
   if(missing.length){
@@ -62,7 +64,9 @@ export function constructionTaskPrompt(raw:unknown, recovery?:string) {
       ?'Use get_discovery_queue to find a candidate potentially affected by proposed deletions. Inspect its exact range using focused frames and real audio if necessary; save a justified keep/discard/uncertain decision. Do not discard based on a sampled overview.'
       :'Choose ONE unresolved scene/cut decision. Inspect its setup/payoff context and exact edge frames, revise the plan, and validate only when enough evidence exists. Do not apply unreviewed destructive edits.'
   } else if(stage==='review'){
-    task='Inspect ONE unfinished edited join or a short part of the actual output, including mixed audio. Record grounded evidence; finalize review only after every join and required story section has been checked.'
+    task=reviewIssues.length
+      ?`A completed review found a real defect: ${reviewIssues.map(x=>brief(x,180)).join(' | ')}. Use begin_construction_repair for one focused, bounded correction pass on the CURRENT permitted timeline; do not claim the edit is finished or assume deleted source is recoverable.`
+      :'Inspect ONE unfinished edited join or a short part of the actual output, including mixed audio. Record grounded evidence; finalize review only after every join and required story section has been checked.'
   } else {
     task='Read get_video_construction and report the unresolved blocker; do not repeat destructive actions.'
   }
