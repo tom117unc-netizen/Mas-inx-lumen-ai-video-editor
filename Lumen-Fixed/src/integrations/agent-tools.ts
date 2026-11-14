@@ -27,7 +27,7 @@ import { CONTROL_TOOLS } from './tools/control'
 import { emitToolImages } from './tools/events'
 import { FOOTAGE_TOOLS } from './tools/footage'
 import { INSPECT_TOOLS } from './tools/inspect'
-import { bool, num, obj, oneOf, str, waitSeconds, withImages, WithImages, type AgentTool, type ToolContext, type ToolImage } from './tools/kit'
+import { bool, num, obj, oneOf, str, waitSeconds, withImages, WithImages, WithAudio, type AgentTool, type ToolContext, type ToolImage } from './tools/kit'
 import { VISION_TOOLS } from './tools/vision'
 import { BEAT_TOOLS } from './tools/beats'
 import { SKILL_TOOLS } from './tools/skills'
@@ -727,13 +727,14 @@ export async function runAgentTool(name: string, args: Record<string, unknown>, 
       throw new Error('An unfinished video construction plan is active. Use its inspection, planning and apply_video_construction tools so coverage, dependencies and exact cut boundaries are checked. Pause construction explicitly to use ordinary AI edits; manual editor changes remain available.')
     }
     const out = await tool.run(args ?? {}, ctx)
-    const result = out instanceof WithImages ? out.json : out
+    const result = out instanceof WithImages || out instanceof WithAudio ? out.json : out
     const structured = result && typeof result === 'object' && !Array.isArray(result) ? (result as Record<string, unknown>) : { result }
     const content: BridgeToolResult['content'] = [{ type: 'text', text: JSON.stringify(result, null, 2) }]
     if (out instanceof WithImages && out.images.length) {
       content.push(...out.images.map((img) => ({ type: 'image' as const, data: img.data, mimeType: img.mimeType })))
       emitToolImages(name, out.images)
     }
+    if (out instanceof WithAudio) content.push({type:'audio',data:out.audio.data,mimeType:out.audio.mimeType})
     return { content, structuredContent: structured }
   } catch (err) {
     return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true }
