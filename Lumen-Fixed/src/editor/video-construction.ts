@@ -161,7 +161,7 @@ export function constructionStatus(p:Project,s:ConstructionState) {
     return {stage:complete?'complete':'review',complete,uncovered:[],next:complete?'Finished editorial checks':'Inspect the edited joins, then review story and pacing across the full output'}
   }
   const uncovered=uncoveredRanges(s)
-  return {stage:uncovered.length?'investigate':s.beats.length?'refine':'map',complete:false,uncovered,next:uncovered.length?'Inspect uncovered timeline ranges with audio and pictures':s.beats.length?'Refine scene cuts; inspect neighbouring frames and validate dependencies':'Map chapters, scenes, setups, payoffs and their dependencies'}
+  return {stage:uncovered.length?'investigate':s.beats.length?'refine':'map',complete:false,uncovered,next:uncovered.length?'Inspect uncovered timeline ranges with audio and pictures':s.beats.length?'Refine scene cuts, call inspect_cut_context for each cut, inspect neighbouring frames and validate dialogue boundaries':'Map chapters, scenes, setups, payoffs and their dependencies'}
 }
 export function nextEventProbe(left:number,right:number,leftPresent:boolean,rightPresent:boolean,singleChange:boolean) {
   range.parse({start:left,end:right})
