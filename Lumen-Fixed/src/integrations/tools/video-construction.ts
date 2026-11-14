@@ -188,6 +188,8 @@ export const VIDEO_CONSTRUCTION_TOOLS:AgentTool[]=[
       const next=structuredClone(s)
       next.joinAudioChecks=[...(next.joinAudioChecks??[]).filter(x=>x.frame!==join),
         {frame:join,fingerprint,report}]
+      // New evidence cannot silently inherit an old editorial verdict.
+      next.review=undefined
       await persist(next)
       return {join_frame:join,from_seconds:from,to_seconds:to,report,
         transcript:timelineTranscript(p,Math.max(0,at-3),at+3).slice(0,80),
