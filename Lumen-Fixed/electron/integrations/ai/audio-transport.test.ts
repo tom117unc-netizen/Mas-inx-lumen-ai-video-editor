@@ -10,7 +10,11 @@ describe('explicit audio-capable model routing',()=>{
   expect(canReceiveTimelineAudio('gemini','imagen-4')).toBe(false)
  })
  it('accepts one capped WAV but rejects malformed and oversized audio',()=>{
-  expect(validateAudioPayload({mimeType:'audio/wav',data:'UklGRg=='})).toEqual({mimeType:'audio/wav',data:'UklGRg=='})
+  const header=Buffer.alloc(44)
+  header.write('RIFF',0);header.write('WAVE',8)
+  const wav=header.toString('base64')
+  expect(validateAudioPayload({mimeType:'audio/wav',data:wav})).toEqual({mimeType:'audio/wav',data:wav})
+  expect(()=>validateAudioPayload({mimeType:'audio/wav',data:'UklGRg=='})).toThrow(/header/i)
   expect(()=>validateAudioPayload({mimeType:'audio/mpeg',data:'AAAA'})).toThrow(/WAV/i)
   expect(()=>validateAudioPayload({mimeType:'audio/wav',data:'@@@'})).toThrow(/base64/i)
   expect(()=>validateAudioPayload({mimeType:'audio/wav',data:'A'.repeat(4_000_001)})).toThrow(/size/i)
